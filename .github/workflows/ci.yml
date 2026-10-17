@@ -106,6 +106,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Test the checker itself
+        run: tests/check_event_schema.test.sh
       - name: Check event topic changes require a schema version bump
         run: tools/check_event_schema.sh "${{ github.event.pull_request.base.sha }}" HEAD
 

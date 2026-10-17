@@ -9,8 +9,36 @@ pub fn alert_acknowledged(env: &Env, alert_type: &AlertType, record: &AlertAckRe
         .publish((symbol_short!("alrt_ack"), EVENT_VERSION, alert_type.clone()), record.clone());
 }
 
-pub fn parameter_change_cleanup(env: &Env, count: u32, oldest_kept: u64) {
-    env.events().publish((symbol_short!("pc_clean"),), (count, oldest_kept));
+/// Soroban host limits the topic tuple of any emitted event to at most 4 elements.
+/// Emitting an event with 5 or more topics causes the host to abort transaction execution.
+pub const MAX_EVENT_TOPICS: usize = 4;
+
+/// Trait providing compile-time and runtime guarantees that event topic tuples
+/// do not exceed the Soroban host limit of 4 topics.
+pub trait ValidTopicTuple {
+    const TOPIC_COUNT: usize;
+}
+
+impl<T1> ValidTopicTuple for (T1,) {
+    const TOPIC_COUNT: usize = 1;
+}
+
+impl<T1, T2> ValidTopicTuple for (T1, T2) {
+    const TOPIC_COUNT: usize = 2;
+}
+
+impl<T1, T2, T3> ValidTopicTuple for (T1, T2, T3) {
+    const TOPIC_COUNT: usize = 3;
+}
+
+impl<T1, T2, T3, T4> ValidTopicTuple for (T1, T2, T3, T4) {
+    const TOPIC_COUNT: usize = 4;
+}
+
+/// Enforces that topic tuple arity is strictly within the Soroban host limit of 4 topics.
+#[inline(always)]
+pub fn assert_topic_limit<T: ValidTopicTuple>(_topics: &T) {
+    assert!(T::TOPIC_COUNT <= MAX_EVENT_TOPICS, "event topic arity exceeds host limit of 4");
 }
 
 /// Event Schema Versioning
@@ -23,6 +51,12 @@ pub fn parameter_change_cleanup(env: &Env, count: u32, oldest_kept: u64) {
 /// - Any change that alters existing field meaning, order, or removes a field, MUST increment the `EVENT_VERSION`
 ///   for that specific event or globally to ensure off-chain indexers can detect the shape change.
 pub const EVENT_VERSION: u32 = 1;
+
+pub fn parameter_change_cleanup(env: &Env, count: u32, oldest_kept: u64) {
+    let topics = (symbol_short!("pc_clean"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (count, oldest_kept));
+}
 // ── Aggregate risk ────────────────────────────────────────────────────────────
 
 /// Emitted when the admin sets a per-asset-pair weight via `set_pair_weight`.
@@ -322,41 +356,53 @@ pub enum BatchRejectionCategory {
 }
 
 /// Emitted when a batch entry is rejected due to contract pause.
-/// Topics: ("bat_rej_pause",)  Data: (count)
+/// Topics: ("bat_rej_pa", EVENT_VERSION)  Data: (count)
 pub fn batch_rejected_contract_paused(env: &Env, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_pa"),), count);
+    let topics = (Symbol::new(env, "bat_rej_pa"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, count);
 }
 
 /// Emitted when batch entries are rejected due to data quality issues.
-/// Topics: ("bat_rej_data",)  Data: (reason_code, count)
+/// Topics: ("bat_rej_dq", EVENT_VERSION)  Data: (reason_code, count)
 /// reason_code: 1 = invalid_score, 2 = invalid_confidence, 3 = invalid_timestamp
 pub fn batch_rejected_data_quality(env: &Env, reason_code: u32, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_dq"),), (reason_code, count));
+    let topics = (Symbol::new(env, "bat_rej_dq"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (reason_code, count));
 }
 
 /// Emitted when batch entries are rejected due to model version issues.
-/// Topics: ("bat_rej_model",)  Data: (reason_code, count)
+/// Topics: ("bat_rej_mv", EVENT_VERSION)  Data: (reason_code, count)
 /// reason_code: 1 = not_registered, 2 = deprecated
 pub fn batch_rejected_model_version(env: &Env, reason_code: u32, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_mv"),), (reason_code, count));
+    let topics = (Symbol::new(env, "bat_rej_mv"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (reason_code, count));
 }
 
 /// Emitted when batch entries exceed rate limits.
-/// Topics: ("bat_rej_ratelimit",)  Data: (count)
+/// Topics: ("bat_rej_rl", EVENT_VERSION)  Data: (count)
 pub fn batch_rejected_rate_limit(env: &Env, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_rl"),), count);
+    let topics = (Symbol::new(env, "bat_rej_rl"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, count);
 }
 
 /// Emitted when batch entries fail attestation validation.
-/// Topics: ("bat_rej_attest",)  Data: (count)
+/// Topics: ("bat_rej_at", EVENT_VERSION)  Data: (count)
 pub fn batch_rejected_attestation(env: &Env, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_at"),), count);
+    let topics = (Symbol::new(env, "bat_rej_at"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, count);
 }
 
 /// Emitted when batch entries fail gate enforcement.
-/// Topics: ("bat_rej_gate",)  Data: (count)
+/// Topics: ("bat_rej_gt", EVENT_VERSION)  Data: (count)
 pub fn batch_rejected_gate_failure(env: &Env, count: u32) {
-    env.events().publish((Symbol::new(env, "bat_rej_gt"),), count);
+    let topics = (Symbol::new(env, "bat_rej_gt"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, count);
 }
 
 /// Summary event emitted after batch processing completes.
@@ -408,15 +454,21 @@ pub fn consensus_config_updated(env: &Env, k: u32, epsilon: u32) {
 }
 
 pub fn model_version_proposed(env: &Env, version: u32, executable_after: u64) {
-    env.events().publish((symbol_short!("mv_prop"),), (version, executable_after));
+    let topics = (symbol_short!("mv_prop"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (version, executable_after));
 }
 
 pub fn model_version_activated(env: &Env, version: u32) {
-    env.events().publish((symbol_short!("mv_act"),), version);
+    let topics = (symbol_short!("mv_act"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, version);
 }
 
 pub fn model_version_deprecated(env: &Env, version: u32) {
-    env.events().publish((symbol_short!("mv_depr"),), version);
+    let topics = (symbol_short!("mv_depr"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, version);
 }
 
 // ── History depth ─────────────────────────────────────────────────────────────
@@ -455,7 +507,9 @@ pub fn signer_tier_updated(
     min_score: u32,
     max_score: u32,
 ) {
-    env.events().publish((symbol_short!("tier_upd"),), (signer.clone(), min_score, max_score));
+    let topics = (symbol_short!("tier_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (signer.clone(), min_score, max_score));
 }
 
 pub fn fee_token_set(env: &Env, token: &Address) {
@@ -507,7 +561,9 @@ pub fn delegate_removed(env: &Env, sub_wallet: &Address) {
 
 /// Emitted when the adaptive threshold is recomputed and changes.
 pub fn adaptive_threshold_updated(env: &Env, new_threshold: u32) {
-    env.events().publish((symbol_short!("at_upd"),), new_threshold);
+    let topics = (symbol_short!("at_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, new_threshold);
 }
 
 /// Emitted when adaptive threshold mode is enabled.
@@ -567,15 +623,12 @@ pub fn score_floor_policy_updated(
     high_water_mark: u32,
     floor_value: u32,
 ) {
-    env.events().publish((symbol_short!("sf_upd"),), (enabled, high_water_mark, floor_value));
+    let topics = (symbol_short!("sf_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (enabled, high_water_mark, floor_value));
 }
 
-pub fn score_floor_overridden(
-    env: &Env,
-    by: &Vec<Address>,
-    wallet: &Address,
-    asset_pair: &Symbol,
-) {
+pub fn score_floor_overridden(env: &Env, by: &Vec<Address>, wallet: &Address, asset_pair: &Symbol) {
     env.events()
         .publish((symbol_short!("sf_ovrd"), wallet.clone(), asset_pair.clone()), by.clone());
 }
@@ -617,10 +670,9 @@ pub fn dispute_opened(
     bond: i128,
     deadline: u64,
 ) {
-    env.events().publish(
-        (symbol_short!("disp_open"), challenger.clone()),
-        (asset_pair.clone(), bond, deadline),
-    );
+    let topics = (symbol_short!("disp_open"), challenger.clone());
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (asset_pair.clone(), bond, deadline));
 }
 
 pub fn dispute_resolved(
@@ -630,10 +682,9 @@ pub fn dispute_resolved(
     corrected_score: u32,
     bond_returned: i128,
 ) {
-    env.events().publish(
-        (symbol_short!("disp_res"), challenger.clone()),
-        (asset_pair.clone(), corrected_score, bond_returned),
-    );
+    let topics = (symbol_short!("disp_res"), challenger.clone());
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (asset_pair.clone(), corrected_score, bond_returned));
 }
 
 pub fn dispute_timed_out(
@@ -643,12 +694,15 @@ pub fn dispute_timed_out(
     bond: i128,
     bonus: i128,
 ) {
-    env.events()
-        .publish((symbol_short!("disp_to"), challenger.clone()), (asset_pair.clone(), bond, bonus));
+    let topics = (symbol_short!("disp_to"), challenger.clone());
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (asset_pair.clone(), bond, bonus));
 }
 
 pub fn finality_buffer_updated(env: &Env, secs: u64) {
-    env.events().publish((symbol_short!("fb_upd"),), secs);
+    let topics = (symbol_short!("fb_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, secs);
 }
 
 pub fn score_pending(env: &Env, wallet: &Address, asset_pair: &Symbol, commit_after: u64) {
@@ -707,7 +761,9 @@ pub fn service_resumed(env: &Env, event: &ServiceResumedEvent) {
 }
 
 pub fn heartbeat_threshold_updated(env: &Env, secs: u64) {
-    env.events().publish((symbol_short!("hb_upd"),), secs);
+    let topics = (symbol_short!("hb_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, secs);
 }
 
 pub fn signer_expiring(env: &Env, signer: &Address) {
@@ -813,7 +869,9 @@ pub fn adaptive_rate_limit_updated(env: &Env, enabled: bool, variance_scale: u32
 }
 
 pub fn cluster_boundaries_updated(env: &Env) {
-    env.events().publish((symbol_short!("clb_upd"),), ());
+    let topics = (symbol_short!("clb_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, ());
 }
 
 /// Emitted when an admin changes the dormancy decay configuration. `field` is
@@ -823,11 +881,15 @@ pub fn dormancy_config_updated(env: &Env, field: Symbol, value: u32) {
 }
 
 pub fn epoch_opened(env: &Env, epoch_id: u32) {
-    env.events().publish((symbol_short!("epo_open"),), epoch_id);
+    let topics = (symbol_short!("epo_open"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, epoch_id);
 }
 
 pub fn epoch_closed(env: &Env, epoch_id: u32) {
-    env.events().publish((symbol_short!("epo_cls"),), epoch_id);
+    let topics = (symbol_short!("epo_cls"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, epoch_id);
 }
 
 pub fn escalation_resolved(
@@ -870,7 +932,9 @@ pub fn flash_protection_mode_updated(env: &Env, mode: u32) {
 }
 
 pub fn jump_threshold_updated(env: &Env, threshold: u32) {
-    env.events().publish((symbol_short!("jt_upd"),), threshold);
+    let topics = (symbol_short!("jt_upd"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, threshold);
 }
 
 pub fn oracle_registered(env: &Env, asset_pair: &Symbol, oracle: &Address) {
@@ -999,18 +1063,24 @@ pub fn state_snapshot_created(
     entry_count: u32,
     ledger_seq: u32,
 ) {
-    env.events().publish((symbol_short!("snap"),), (score_root.clone(), entry_count, ledger_seq));
+    let topics = (symbol_short!("snap"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, (score_root.clone(), entry_count, ledger_seq));
 }
 
 /// Emitted when an admin freezes the contract via `freeze_contract`.
 /// In freeze mode all mutating operations are rejected.
 pub fn contract_frozen(env: &Env, by: &Address) {
-    env.events().publish((symbol_short!("frozen"),), by.clone());
+    let topics = (symbol_short!("frozen"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, by.clone());
 }
 
 /// Emitted when an admin unfreezes the contract via `unfreeze_contract`.
 pub fn contract_unfrozen(env: &Env, by: &Address) {
-    env.events().publish((symbol_short!("unfroz"),), by.clone());
+    let topics = (symbol_short!("unfroz"), EVENT_VERSION);
+    assert_topic_limit(&topics);
+    env.events().publish(topics, by.clone());
 }
 
 /// Emitted when a post-incident backup restoration completes via

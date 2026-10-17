@@ -22,6 +22,7 @@ Events are classified into three stability categories, each with different compa
 3. Field removal requires major version bump
 4. New fields can only be appended to the data payload
 5. Changes to field meaning require version bump and migration docs
+6. Topic count must never exceed 4 (Soroban host limit); diagnostic parameters must be consolidated into the data payload
 
 **Examples**: `score`, `watch`, `breach`, `scr_veto`, `dispute_*`, `admin_*`, `upgrade_*`
 
