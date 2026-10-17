@@ -216,6 +216,11 @@ pub fn compare_results(
 
     for (label, value_a, value_b) in [
         (
+            "gas consumed",
+            result_a.metadata.gas_consumed,
+            result_b.metadata.gas_consumed,
+        ),
+        (
             "CPU instructions",
             result_a.metadata.cpu_instructions,
             result_b.metadata.cpu_instructions,
@@ -250,7 +255,7 @@ pub fn compare_results(
         let value_b = result_b.state_snapshot.get(&key).cloned();
 
         if value_a != value_b {
-            state_differences.push(StateDifference { key: key.clone(), value_a, value_b });
+            state_differences.push(StateDifference { key: key.clone(), value_a: value_a.clone(), value_b: value_b.clone() });
 
             if let (Some(va), Some(vb)) = (value_a, value_b) {
                 divergences.push(DeterminismError::StateDivergence {
@@ -407,4 +412,22 @@ mod tests {
         assert!(msg.contains("State divergence"));
         assert!(msg.contains("test_key"));
     }
+
+    #[test]
+    fn test_gas_consumed_divergence_detected() {
+        let state = HashMap::new();
+        let mut result_a = create_test_result("21.0.0", 5, 0, state.clone());
+        result_a.metadata.gas_consumed = Some(1000);
+
+        let mut result_b = create_test_result("21.1.0", 5, 0, state);
+        result_b.metadata.gas_consumed = Some(2000);
+
+        let comparison = compare_results(&result_a, &result_b);
+        assert!(!comparison.is_deterministic);
+        assert!(comparison.divergences.iter().any(|d| matches!(
+            d,
+            DeterminismError::ExecutionDivergence { reason, .. } if reason.contains("gas consumed")
+        )));
+    }
 }
+

@@ -210,7 +210,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_service_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_1" 2>/dev/null && pass "Service signer 1 added" || fail "Failed to add service signer 1"
 record_action "$(next_test_id)" "add_service_signer" "completed" "Added signer 1"
 
@@ -222,7 +222,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_service_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_2" 2>/dev/null && pass "Service signer 2 added" || fail "Failed to add service signer 2"
 record_action "$(next_test_id)" "add_service_signer" "completed" "Added signer 2"
 
@@ -234,7 +234,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_service_threshold \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --threshold 2 2>/dev/null && pass "Service threshold set to 2" || fail "Failed to set service threshold"
 record_action "$(next_test_id)" "set_service_threshold" "completed" "Threshold set to 2"
 
@@ -259,7 +259,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   remove_service_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_2" 2>/dev/null && pass "Service signer 2 removed (signer loss simulation)" || fail "Failed to remove service signer 2"
 record_action "$(next_test_id)" "remove_service_signer" "completed" "Signer loss: removed signer 2"
 
@@ -284,7 +284,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_service_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_2" 2>/dev/null && pass "Service signer 2 re-added (rollback)" || warn "Failed to re-add signer 2"
 
 run soroban contract invoke \
@@ -293,7 +293,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_service_threshold \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --threshold 2 2>/dev/null && pass "Service threshold restored to 2 (rollback)" || warn "Failed to restore threshold"
 record_action "$(next_test_id)" "rollback_service_signer" "completed" "Rolled back signer removal"
 
@@ -310,7 +310,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_admin_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_1" 2>/dev/null && pass "Admin signer 1 added" || fail "Failed to add admin signer 1"
 record_action "$(next_test_id)" "add_admin_signer" "completed" "Added admin signer 1"
 
@@ -322,7 +322,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_admin_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_2" 2>/dev/null && pass "Admin signer 2 added" || fail "Failed to add admin signer 2"
 record_action "$(next_test_id)" "add_admin_signer" "completed" "Added admin signer 2"
 
@@ -334,7 +334,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_admin_threshold \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --threshold 2 2>/dev/null && pass "Admin threshold set to 2" || fail "Failed to set admin threshold"
 record_action "$(next_test_id)" "set_admin_threshold" "completed" "Threshold set to 2"
 
@@ -360,7 +360,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   remove_admin_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$INVALID_SIGNER" 2>/dev/null && fail "Removal of non-existent signer unexpectedly succeeded" || pass "Non-existent signer removal correctly rejected"
 
 # 4f. Simulate partial failure: set threshold exceeding set size
@@ -371,7 +371,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_admin_threshold \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --threshold 99 2>/dev/null && fail "Invalid threshold unexpectedly accepted" || pass "Threshold > set size correctly rejected"
 
 # 4g. Rollback admin set: remove all but first signer
@@ -382,7 +382,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   remove_admin_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_2" 2>/dev/null && pass "Admin signer 2 removed (rollback)" || warn "Failed to remove admin signer 2"
 
 # After removal, the threshold should auto-adjust to 1 (only 1 signer remains)
@@ -417,7 +417,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_service_pubkey \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --pubkey "$DUMMY_PUBKEY_1" 2>/dev/null && pass "Service pubkey set" || fail "Failed to set service pubkey"
 record_action "$(next_test_id)" "set_service_pubkey" "completed" "Initial pubkey set"
 
@@ -430,7 +430,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   rotate_service_pubkey \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --new_key "$DUMMY_PUBKEY_2" \
   --overlap_secs "$OVERLAP_SECS" 2>/dev/null && pass "Service pubkey rotation started with ${OVERLAP_SECS}s overlap" || fail "Failed to rotate service pubkey"
 record_action "$(next_test_id)" "rotate_service_pubkey" "completed" "Rotated with ${OVERLAP_SECS}s overlap"
@@ -457,7 +457,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   rotate_service_pubkey \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --new_key "$DUMMY_PUBKEY_1" \
   --overlap_secs 0 2>/dev/null && pass "Instant rotation (zero overlap) succeeded" || fail "Instant rotation failed"
 record_action "$(next_test_id)" "rotate_service_pubkey_instant" "completed" "Instant rotation with 0 overlap"
@@ -516,7 +516,7 @@ for signer_idx in 2 1; do
     --network "$NETWORK" \
     -- \
     remove_service_signer \
-    --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+    --admin-signers "[\"$ADMIN_ADDRESS\"]" \
     --signer "${!signer_var}" 2>/dev/null || true
 done
 
@@ -527,7 +527,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   add_service_signer \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --signer "$SIGNER_1" 2>/dev/null || true
 
 run soroban contract invoke \
@@ -536,7 +536,7 @@ run soroban contract invoke \
   --network "$NETWORK" \
   -- \
   set_service_threshold \
-  --admin_signants "[\"$ADMIN_ADDRESS\"]" \
+  --admin-signers "[\"$ADMIN_ADDRESS\"]" \
   --threshold 1 2>/dev/null || true
 
 pass "Signer set refreshed after stale data incident"
