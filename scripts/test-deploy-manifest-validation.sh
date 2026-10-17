@@ -19,8 +19,22 @@ VALID_SERVICE="GBZXN7PIRZGNMHGA7MUUUF4GWPJUEIYSAAWJKGH3PXWXOG7BXUZW7UMB"
 write_manifest() {
   cat >"$TMP_DIR/manifest.json" <<EOF
 {
-  "testnet": { "upgrade_delay_secs": $1, "cooldown_secs": $2, "risk_threshold": $3, "schema_version": $4 },
-  "mainnet": { "upgrade_delay_secs": $1, "cooldown_secs": $2, "risk_threshold": $3, "schema_version": $4 }
+  "testnet": {
+    "upgrade_delay_secs": $1,
+    "cooldown_secs": $2,
+    "risk_threshold": $3,
+    "schema_version": $4,
+    "RPC_URL": "https://soroban-testnet.stellar.org",
+    "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015"
+  },
+  "mainnet": {
+    "upgrade_delay_secs": $1,
+    "cooldown_secs": $2,
+    "risk_threshold": $3,
+    "schema_version": $4,
+    "RPC_URL": "https://mainnet.sorobanrpc.com",
+    "NETWORK_PASSPHRASE": "Public Global Stellar Network ; September 2015"
+  }
 }
 EOF
 }
@@ -91,6 +105,37 @@ expect_fail "mainnet rejects the default 'deployer' admin identity" \
 # Missing network entry.
 expect_fail "missing network entry in manifest is rejected" \
   validate_manifest devnet "$TMP_DIR/manifest.json" "$VALID_ADMIN" "$VALID_SERVICE"
+
+# Missing or invalid RPC_URL.
+cat >"$TMP_DIR/manifest_bad_rpc.json" <<EOF
+{
+  "testnet": {
+    "upgrade_delay_secs": 172800,
+    "cooldown_secs": 3600,
+    "risk_threshold": 75,
+    "schema_version": 4,
+    "RPC_URL": "http://insecure.example.com",
+    "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015"
+  }
+}
+EOF
+expect_fail "non-HTTPS RPC_URL is rejected" \
+  validate_manifest testnet "$TMP_DIR/manifest_bad_rpc.json" "$VALID_ADMIN" "$VALID_SERVICE"
+
+# Missing NETWORK_PASSPHRASE.
+cat >"$TMP_DIR/manifest_no_passphrase.json" <<EOF
+{
+  "testnet": {
+    "upgrade_delay_secs": 172800,
+    "cooldown_secs": 3600,
+    "risk_threshold": 75,
+    "schema_version": 4,
+    "RPC_URL": "https://soroban-testnet.stellar.org"
+  }
+}
+EOF
+expect_fail "missing NETWORK_PASSPHRASE is rejected" \
+  validate_manifest testnet "$TMP_DIR/manifest_no_passphrase.json" "$VALID_ADMIN" "$VALID_SERVICE"
 
 echo ""
 echo "$pass passed, $fail failed"

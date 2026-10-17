@@ -71,15 +71,47 @@ NOW=$(date +%s)
 
 # ── Query on-chain score ──────────────────────────────────────────────────────
 # Returns JSON from get_score, or empty string on ScoreNotFound.
+# Halts with an error if contract invocation fails for any other reason.
 query_onchain() {
   local wallet="$1" pair="$2"
+  local stdout_file="${TMPDIR:-/tmp}/query_out_$$.txt"
+  local stderr_file="${TMPDIR:-/tmp}/query_err_$$.txt"
+  local exit_code=0
+
+  set +e
   "$CLI" contract invoke \
     --id "$CONTRACT_ID" \
     --rpc-url "$RPC_URL" \
     --network "$NETWORK" \
     -- get_score \
     --wallet "$wallet" \
-    --asset_pair "$pair" 2>/dev/null || true
+    --asset-pair "$pair" >"$stdout_file" 2>"$stderr_file"
+  exit_code=$?
+  set -e
+
+  local stdout_content stderr_content
+  stdout_content=$(cat "$stdout_file" 2>/dev/null || true)
+  stderr_content=$(cat "$stderr_file" 2>/dev/null || true)
+  rm -f "$stdout_file" "$stderr_file"
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "$stdout_content"
+    return 0
+  fi
+
+  # Exit code was non-zero. If it's a known ScoreNotFound (error code 6), return empty.
+  if [[ "$stderr_content" =~ "ScoreNotFound" || "$stderr_content" =~ "Error(Contract, #6)" || "$stderr_content" =~ "Error(Contract, 6)" || "$stderr_content" =~ "ContractError(6)" || "$stdout_content" =~ "ScoreNotFound" || "$stdout_content" =~ "Error(Contract, #6)" ]]; then
+    return 0
+  fi
+
+  # Any other failure (RPC error, bad argument, contract not found, etc.) is reported.
+  echo "Error: on-chain query failed for wallet '$wallet', asset pair '$pair' (exit $exit_code):" >&2
+  if [[ -n "$stderr_content" ]]; then
+    echo "$stderr_content" >&2
+  else
+    echo "$stdout_content" >&2
+  fi
+  return "$exit_code"
 }
 
 # ── Build pipeline index ──────────────────────────────────────────────────────

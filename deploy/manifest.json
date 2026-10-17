@@ -3,18 +3,24 @@
     "upgrade_delay_secs": 172800,
     "cooldown_secs": 3600,
     "risk_threshold": 75,
-    "schema_version": 4
+    "schema_version": 4,
+    "RPC_URL": "https://soroban-testnet.stellar.org",
+    "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015"
   },
   "futurenet": {
     "upgrade_delay_secs": 172800,
     "cooldown_secs": 3600,
     "risk_threshold": 75,
-    "schema_version": 4
+    "schema_version": 4,
+    "RPC_URL": "https://rpc-futurenet.stellar.org",
+    "NETWORK_PASSPHRASE": "Test SDF Future Network ; October 2022"
   },
   "mainnet": {
     "upgrade_delay_secs": 172800,
     "cooldown_secs": 3600,
     "risk_threshold": 75,
-    "schema_version": 4
+    "schema_version": 4,
+    "RPC_URL": "https://mainnet.sorobanrpc.com",
+    "NETWORK_PASSPHRASE": "Public Global Stellar Network ; September 2015"
   }
 }
