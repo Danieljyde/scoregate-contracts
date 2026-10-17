@@ -891,6 +891,12 @@ pub enum SignerState {
     Revoked = 3,
 }
 
+#[allow(non_upper_case_globals)]
+impl SignerState {
+    pub const PendingActivation: SignerState = SignerState::Pending;
+    pub const Suspended: SignerState = SignerState::Superseded;
+}
+
 /// Record tracking signer lifecycle state and timing for audit compliance.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

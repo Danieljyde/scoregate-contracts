@@ -983,6 +983,7 @@ pub fn prune_expired_parameter_proposals(env: &Env) {
 /// Deletes all expired proposals from storage that have been expired for at least 48 hours.
 /// Returns (count_deleted, oldest_proposal_kept_timestamp).
 pub fn cleanup_expired_parameter_proposals(env: &Env) -> (u32, u64) {
+    prune_expired_parameter_proposals(env);
     let now = env.ledger().timestamp();
     let ttl_buffer_secs = 48 * 3600;
     let mut count = 0;
@@ -1002,6 +1003,7 @@ pub fn cleanup_expired_parameter_proposals(env: &Env) -> (u32, u64) {
                     .proposed_at
                     .saturating_add(record.proposal.time_lock_secs.saturating_mul(2));
                 if now > expiry.saturating_add(ttl_buffer_secs) {
+                    env.storage().instance().remove(&DataKeyB::ParameterProposal(id));
                     env.storage().persistent().remove(&DataKeyB::ParameterProposal(id));
                     count += 1;
                     continue;

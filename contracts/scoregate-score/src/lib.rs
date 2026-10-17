@@ -1797,11 +1797,24 @@ impl ScoreGateScoreContract {
                 if !service_set.contains(&signer) {
                     return Err(Error::UnauthorizedSigner);
                 }
+                // Signer lifecycle gate (#172): only `Active` signers may
+                // authorize a batch. A `Pending` signer whose grace period
+                // has elapsed is promoted lazily (same as
+                // `require_service_signers_auth`); any signer still not
+                // `Active` afterwards is rejected.
+                governance_helpers::transition_pending_to_active_if_ready(&env, &signer)?;
+                if let Some(state) = storage::get_signer_state(&env, &signer) {
+                    if state != SignerState::Active {
+                        return Err(Error::UnauthorizedSigner);
+                    }
+                }
                 storage::check_signer_expired(&env, &signer)?;
                 signer.require_auth();
             }
         } else {
             let service = storage::get_service(&env);
+            // Same expiry gate as `submit_score`'s legacy path (#171).
+            storage::check_signer_expired(&env, &service)?;
             service.require_auth();
         }
 
@@ -7009,6 +7022,10 @@ impl ScoreGateScoreContract {
             return Err(Error::NotInitialized);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
+        let current_epoch = storage::get_current_epoch(&env);
+        if epoch_id <= current_epoch {
+            return Err(Error::InvalidArgument);
+        }
         storage::set_current_epoch(&env, epoch_id);
         storage::set_epoch_open(&env, true);
         events::epoch_opened(&env, epoch_id);
@@ -7618,7 +7635,6 @@ impl ScoreGateScoreContract {
         env: Env,
         proposal_id: u64,
     ) -> Result<ParameterProposalRecord, Error> {
-        storage::prune_expired_parameter_proposals(&env);
         storage::get_parameter_proposal_record(&env, proposal_id)
             .ok_or(Error::ParameterProposalNotFound)
     }
