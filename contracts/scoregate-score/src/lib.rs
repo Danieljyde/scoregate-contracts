@@ -100,8 +100,11 @@ mod test_batch_attestation_replay;
 // #[cfg(test)]
 // mod test_model_stats;
 
-// #[cfg(test)]
-// mod test_velocity_cap;
+#[cfg(test)]
+mod test_velocity_cap;
+
+#[cfg(test)]
+mod test_escalation;
 
 // #[cfg(test)]
 // mod test_score_floor;
@@ -6677,6 +6680,9 @@ impl ScoreGateScoreContract {
     /// client.transfer_admin(&Vec::new(&env), &new_admin);
     /// assert!(client.has_pending_admin_transfer());
     /// ```
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InvalidArgument`] if `new_admin` equals the current admin address.
     pub fn transfer_admin(
         env: Env,
         admin_signers: Vec<Address>,
@@ -6687,8 +6693,13 @@ impl ScoreGateScoreContract {
         }
         Self::require_admin_auth(&env, &admin_signers)?;
         let admin = storage::get_admin(&env);
+        if new_admin == admin {
+            return Err(Error::InvalidArgument);
+        }
         storage::set_pending_admin(&env, &new_admin);
         events::admin_transfer_initiated(&env, &admin, &new_admin);
+        #[cfg(any(test, feature = "testutils"))]
+        invariants::invariant_check(&env);
         Ok(())
     }
 
@@ -9328,6 +9339,11 @@ impl ScoreGateScoreContract {
     }
 
     /// Admin function to configure the score velocity cap.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InvalidArgument`] if `enabled` is true and `points_per_hour` is 0,
+    ///   or if `points_per_hour > 100`.
     pub fn set_score_velocity_cap(
         env: Env,
         admin_signers: Vec<Address>,
@@ -9336,6 +9352,9 @@ impl ScoreGateScoreContract {
     ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
+        }
+        if (enabled && points_per_hour == 0) || points_per_hour > 100 {
+            return Err(Error::InvalidArgument);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
 
