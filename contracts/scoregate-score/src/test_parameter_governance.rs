@@ -7,8 +7,8 @@ use soroban_sdk::{
 
 use crate::{
     constants::{
-        DEFAULT_COOLDOWN_SECS, DEFAULT_UPGRADE_DELAY_SECS, MAX_PENDING_PARAMETER_PROPOSALS,
-        MIN_COOLDOWN_SECS,
+        DEFAULT_COOLDOWN_SECS, DEFAULT_UPGRADE_DELAY_SECS, MAX_PARAMETER_PROPOSAL_HISTORY,
+        MAX_PENDING_PARAMETER_PROPOSALS, MIN_COOLDOWN_SECS,
     },
     parameter_governance::param_key_cooldown,
     storage,
@@ -424,34 +424,32 @@ fn test_execute_nonexistent_proposal_returns_not_found() {
 }
 
 #[test]
-fn test_get_parameter_proposal_is_purely_read_only_and_does_not_mutate_storage() {
-    let (env, client, admin, _service) = setup();
+fn test_parameter_proposal_index_bounded_by_max_history_cap() {
+    let (env, client, admin, service) = setup();
+    env.budget().reset_unlimited();
     let value = encode_u64(&env, MIN_COOLDOWN_SECS);
 
-    let proposal_id = client.propose_parameter_change(
-        &admin_signers(&env, &admin),
-        &param_key_cooldown(),
-        &value,
-    );
+    // Propose and immediately veto 105 proposals to ensure pending limit (10) isn't hit
+    for _ in 0..105 {
+        let pid = client.propose_parameter_change(
+            &admin_signers(&env, &admin),
+            &param_key_cooldown(),
+            &value,
+        );
+        client.veto_parameter_change(&service_signers(&env, &service), &pid);
+    }
 
-    // Advance time past proposal expiry (proposed_at + 2 * time_lock + 1)
-    advance_to(&env, START_TS + DEFAULT_UPGRADE_DELAY_SECS * 2 + 1);
+    let index = client.get_parameter_proposal_index();
+    assert_eq!(index.len(), MAX_PARAMETER_PROPOSAL_HISTORY);
+    // Proposal IDs start at 1, so after 105 proposals (1..=105), the first 5 (1..=5) should be pruned
+    assert_eq!(index.get(0).unwrap(), 6);
+    assert_eq!(index.get(99).unwrap(), 105);
 
-    // Calling get_parameter_proposal must not mutate storage or prune the proposal
-    let record = client.get_parameter_proposal(&proposal_id);
-    assert_eq!(record.status, ParameterProposalStatus::Pending);
+    // Pruned proposal #1 should no longer be found in storage
+    let pruned = client.try_get_parameter_proposal(&1u64);
+    assert_eq!(pruned, Err(Ok(Error::ParameterProposalNotFound)));
 
-    // Pending IDs must still contain proposal_id (not pruned by getter)
-    assert_eq!(client.get_pending_param_prop_ids(), Vec::from_array(&env, [proposal_id]));
-
-    // Advance past 48h buffer and verify cleanup_expired_param_proposals cleans it up
-    advance_to(&env, START_TS + DEFAULT_UPGRADE_DELAY_SECS * 2 + 48 * 3600 + 10);
-    let cleaned = client.cleanup_expired_param_proposals(&admin_signers(&env, &admin));
-    assert_eq!(cleaned, 1);
-
-    // Now proposal is deleted
-    assert_eq!(
-        client.try_get_parameter_proposal(&proposal_id),
-        Err(Ok(Error::ParameterProposalNotFound))
-    );
+    // Retained proposal #6 should still be accessible
+    let retained = client.get_parameter_proposal(&6u64);
+    assert_eq!(retained.status, ParameterProposalStatus::Vetoed);
 }

@@ -73,8 +73,14 @@ mod test_deprecation_compat;
 #[cfg(test)]
 mod test_pubkey_canonicalization;
 
-// #[cfg(test)]
-// mod test_rate_limit;
+#[cfg(test)]
+mod test_rate_limit;
+
+#[cfg(test)]
+mod test_consensus_config;
+
+#[cfg(test)]
+mod test_zk_range_proof;
 
 // #[cfg(test)]
 // mod test_multisig_service;
@@ -100,8 +106,11 @@ mod test_batch_attestation_replay;
 // #[cfg(test)]
 // mod test_model_stats;
 
-// #[cfg(test)]
-// mod test_velocity_cap;
+#[cfg(test)]
+mod test_velocity_cap;
+
+#[cfg(test)]
+mod test_escalation;
 
 // #[cfg(test)]
 // mod test_score_floor;
@@ -236,6 +245,18 @@ mod test_schema_version_probes;
 
 #[cfg(test)]
 mod test_dos_read_patterns;
+
+#[cfg(test)]
+mod test_fee;
+
+#[cfg(test)]
+mod test_delegation;
+
+#[cfg(test)]
+mod test_arch_owner;
+
+#[cfg(test)]
+mod test_pause;
 
 use soroban_sdk::{
     contract, contractimpl, crypto::Hash, symbol_short, token, Address, Bytes, BytesN, Env,
@@ -2152,8 +2173,7 @@ impl ScoreGateScoreContract {
             return Bytes::new(&env);
         }
         // Derive the evaluation point z for this key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(&wallet);
 
         let pair_str = match SymbolStr::try_from_val(&env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
@@ -2276,8 +2296,7 @@ impl ScoreGateScoreContract {
         };
 
         // Recompute the evaluation point from the supplied key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(&wallet);
         let pair_str = match SymbolStr::try_from_val(&env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
             Err(_) => return false,
@@ -3623,6 +3642,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -3630,17 +3650,20 @@ impl ScoreGateScoreContract {
     /// Applies a pending simple parameter change (proposed via
     /// `set_risk_threshold`, `set_history_max_depth`, `set_upgrade_delay`,
     /// `set_cooldown`, or `set_staleness_window`) once its time-lock delay
-    /// has elapsed. Callable by anyone — the only gate is `apply_after <= now`.
+    /// has elapsed. When mandatory reviewers are configured, all mandatory
+    /// reviewers must have approved `key` before application can succeed.
     ///
     /// # Errors
     /// - [`Error::NoPendingUpgrade`] if no change is pending for `key`.
     /// - [`Error::UpgradeNotReady`] if `apply_after > now`.
+    /// - [`Error::MissingMandatoryReviewerApprovals`] if mandatory reviewers are configured and have not all approved `key`.
     pub fn apply_param_change(env: Env, key: Symbol) -> Result<(), Error> {
         let pending =
             storage::get_pending_param_change(&env, &key).ok_or(Error::NoPendingUpgrade)?;
         if env.ledger().timestamp() < pending.apply_after {
             return Err(Error::UpgradeNotReady);
         }
+        Self::require_mandatory_reviewers_approved(&env, &key)?;
         match &pending.new_value {
             ParamValue::U32(v) if key == symbol_short!("risk_thr") => {
                 storage::set_risk_threshold(&env, *v)
@@ -3651,12 +3674,18 @@ impl ScoreGateScoreContract {
             ParamValue::U64(v) if key == symbol_short!("upg_dly") => {
                 storage::set_upgrade_delay(&env, *v)
             }
+            ParamValue::U64(v) if key == symbol_short!("cooldown") => {
+                storage::set_cooldown_secs(&env, *v);
+                events::cooldown_updated(&env, *v);
+            }
             ParamValue::U64(v) if key == symbol_short!("stale_w") => {
                 storage::set_staleness_window(&env, *v)
             }
             _ => return Err(Error::InvalidParameterKey),
         }
         storage::clear_pending_param_change(&env, &key);
+        storage::clear_review_approvals(&env, &key);
+        events::param_change_applied(&env, &key, pending.new_value);
         Ok(())
     }
 
@@ -3706,6 +3735,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &symbol_short!("pol_bdl"));
         events::policy_bundle_proposed(&env, risk_threshold, cooldown_secs, apply_after);
         Ok(())
     }
@@ -3713,25 +3743,54 @@ impl ScoreGateScoreContract {
     /// Applies a pending policy bundle once its time-lock delay has
     /// elapsed, writing the risk threshold and cooldown together in the
     /// same call so no caller can ever observe one field updated and the
-    /// other still pending. Callable by anyone — the only gate is
-    /// `apply_after <= now`, matching [`Self::apply_param_change`].
+    /// other still pending. When mandatory reviewers are configured, all
+    /// mandatory reviewers must have approved `"pol_bdl"` before application.
     ///
     /// # Errors
     /// - [`Error::NoPendingUpgrade`] if no bundle is pending.
     /// - [`Error::UpgradeNotReady`] if `apply_after > now`.
+    /// - [`Error::MissingMandatoryReviewerApprovals`] if mandatory reviewers are configured and have not all approved `"pol_bdl"`.
     pub fn apply_policy_bundle(env: Env) -> Result<(), Error> {
         let pending = storage::get_pending_policy_bundle(&env).ok_or(Error::NoPendingUpgrade)?;
         if env.ledger().timestamp() < pending.apply_after {
             return Err(Error::UpgradeNotReady);
         }
+        let bundle_key = symbol_short!("pol_bdl");
+        Self::require_mandatory_reviewers_approved(&env, &bundle_key)?;
         storage::set_risk_threshold(&env, pending.bundle.risk_threshold);
         storage::set_cooldown_secs(&env, pending.bundle.cooldown_secs);
         storage::clear_pending_policy_bundle(&env);
+        storage::clear_review_approvals(&env, &bundle_key);
         events::policy_bundle_applied(
             &env,
             pending.bundle.risk_threshold,
             pending.bundle.cooldown_secs,
         );
+        Ok(())
+    }
+
+    /// Cancels a pending policy bundle proposal before or after its time-lock
+    /// elapses, clearing the queued proposal from storage and emitting a
+    /// `policy_bundle_vetoed` audit event.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has not been initialized.
+    /// - [`Error::NoPendingUpgrade`] if no policy bundle proposal is pending.
+    pub fn veto_policy_bundle(
+        env: Env,
+        admin_signers: Vec<Address>,
+        bundle_id: Symbol,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
+        if !storage::has_pending_policy_bundle(&env) {
+            return Err(Error::NoPendingUpgrade);
+        }
+        storage::clear_pending_policy_bundle(&env);
+        storage::clear_review_approvals(&env, &symbol_short!("pol_bdl"));
+        events::policy_bundle_vetoed(&env, &bundle_id, env.ledger().timestamp());
         Ok(())
     }
 
@@ -3760,7 +3819,8 @@ impl ScoreGateScoreContract {
     // ── Wallet Score Delegation ───────────────────────────────────────────────
 
     /// Registers a custodian wallet as the fallback score source for `sub_wallet`.
-    /// Admin only. Rejects cyclic delegation where a wallet delegates to itself,
+    /// Requires dual authorization from both contract admin and `sub_wallet`.
+    /// Rejects cyclic delegation where a wallet delegates to itself,
     /// or a custodian delegates back to one of its sub-wallets.
     pub fn set_score_delegate(
         env: Env,
@@ -3771,6 +3831,7 @@ impl ScoreGateScoreContract {
             return Err(Error::NotInitialized);
         }
         storage::get_admin(&env).require_auth();
+        sub_wallet.require_auth();
 
         let mut current = custodian.clone();
         if current == sub_wallet {
@@ -4903,6 +4964,13 @@ impl ScoreGateScoreContract {
         proof: Bytes,
         threshold: u32,
     ) -> bool {
+        if storage::is_paused(&env)
+            || storage::is_pair_paused(&env, &asset_pair)
+            || storage::is_frozen(&env)
+            || storage::is_embargoed(&env, &wallet)
+        {
+            return false;
+        }
         if !Self::asset_pair_is_bounded(&env, &asset_pair) {
             return false;
         }
@@ -6690,6 +6758,9 @@ impl ScoreGateScoreContract {
     /// client.transfer_admin(&Vec::new(&env), &new_admin);
     /// assert!(client.has_pending_admin_transfer());
     /// ```
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InvalidArgument`] if `new_admin` equals the current admin address.
     pub fn transfer_admin(
         env: Env,
         admin_signers: Vec<Address>,
@@ -6700,8 +6771,13 @@ impl ScoreGateScoreContract {
         }
         Self::require_admin_auth(&env, &admin_signers)?;
         let admin = storage::get_admin(&env);
+        if new_admin == admin {
+            return Err(Error::InvalidArgument);
+        }
         storage::set_pending_admin(&env, &new_admin);
         events::admin_transfer_initiated(&env, &admin, &new_admin);
+        #[cfg(any(test, feature = "testutils"))]
+        invariants::invariant_check(&env);
         Ok(())
     }
 
@@ -6965,6 +7041,9 @@ impl ScoreGateScoreContract {
             return Err(Error::NotInitialized);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
+        if !storage::is_epoch_open(&env) {
+            return Err(Error::EpochAlreadyClosed);
+        }
         let epoch_id = storage::get_current_epoch(&env);
         storage::set_epoch_open(&env, false);
         events::epoch_closed(&env, epoch_id);
@@ -6978,6 +7057,9 @@ impl ScoreGateScoreContract {
 
     /// Returns `true` when the current epoch is open for submissions.
     pub fn is_epoch_open(env: Env) -> bool {
+        if !storage::has_admin(&env) {
+            return false;
+        }
         storage::is_epoch_open(&env)
     }
 
@@ -7043,24 +7125,33 @@ impl ScoreGateScoreContract {
     /// client.initialize(&admin, &service);
     /// let pair = symbol_short!("XLM_USDC");
     /// assert!(!client.is_pair_paused(&pair));
-    /// client.set_pair_paused(&pair, &true);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &true);
     /// assert!(client.is_pair_paused(&pair));
     /// // submit_score for this pair now returns Error::ContractPaused, while
     /// // every other pair is unaffected.
-    /// client.set_pair_paused(&pair, &false);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &false);
     /// assert!(!client.is_pair_paused(&pair));
     /// ```
     ///
     /// # Errors
     /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::AssetPairTooLong`] if `asset_pair` exceeds `MAX_ASSET_PAIR_LEN`.
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if multisig auth fails.
     /// - [`Error::ServiceSetFull`] if `asset_pair` is not already paused
     ///   and `PausedPairIndex` already holds `MAX_PAUSED_PAIRS` (50) entries.
-    pub fn set_pair_paused(env: Env, asset_pair: Symbol, paused: bool) -> Result<(), Error> {
+    pub fn set_pair_paused(
+        env: Env,
+        admin_signers: Vec<Address>,
+        asset_pair: Symbol,
+        paused: bool,
+    ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
-        admin.require_auth();
+        if !Self::asset_pair_is_bounded(&env, &asset_pair) {
+            return Err(Error::AssetPairTooLong);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
 
         if paused {
             if !storage::is_pair_paused(&env, &asset_pair)
@@ -7127,7 +7218,7 @@ impl ScoreGateScoreContract {
     /// client.initialize(&admin, &service);
     /// assert!(client.get_paused_pairs().is_empty());
     /// let pair = symbol_short!("XLM_USDC");
-    /// client.set_pair_paused(&pair, &true);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &true);
     /// assert_eq!(client.get_paused_pairs().len(), 1);
     /// ```
     pub fn get_paused_pairs(env: Env) -> Vec<Symbol> {
@@ -7208,6 +7299,7 @@ impl ScoreGateScoreContract {
             proposed_by: admin.clone(),
         };
         storage::set_pending_upgrade(&env, &proposal);
+        storage::clear_review_approvals(&env, &symbol_short!("upgrade"));
         // The propose_upgrade audit payload is the new WASM hash (32 bytes) rather
         // than a discriminant byte so the committed hash is unconditionally captured.
         // append_governance_action emits the typed gov_action event alongside it.
@@ -7259,10 +7351,14 @@ impl ScoreGateScoreContract {
             return Err(Error::UpgradeNotReady);
         }
 
+        let target = symbol_short!("upgrade");
+        Self::require_mandatory_reviewers_approved(&env, &target)?;
+
         // The actual Soroban upgrade primitive — replaces this contract's WASM.
         env.deployer().update_current_contract_wasm(proposal.new_wasm_hash.clone());
 
         storage::clear_pending_upgrade(&env);
+        storage::clear_review_approvals(&env, &target);
         events::upgrade_executed(&env, &proposal.new_wasm_hash);
         Ok(())
     }
@@ -7290,6 +7386,7 @@ impl ScoreGateScoreContract {
             return Err(Error::NoPendingUpgrade);
         }
         storage::clear_pending_upgrade(&env);
+        storage::clear_review_approvals(&env, &symbol_short!("upgrade"));
 
         events::upgrade_vetoed(&env, &admin);
         Ok(())
@@ -7355,6 +7452,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -7423,6 +7521,7 @@ impl ScoreGateScoreContract {
         let record = ParameterProposalRecord { proposal, status: ParameterProposalStatus::Pending };
         storage::set_parameter_proposal_record(&env, proposal_id, &record);
         storage::push_pending_parameter_proposal(&env, proposal_id);
+        storage::clear_review_approvals(&env, &param_key);
 
         let executable_after = now.saturating_add(time_lock_secs);
         events::parameter_change_proposed(&env, proposal_id, &param_key, executable_after);
@@ -7471,12 +7570,15 @@ impl ScoreGateScoreContract {
             return Err(Error::ParameterProposalNotReady);
         }
 
+        Self::require_mandatory_reviewers_approved(&env, &p.param_key)?;
+
         parameter_governance::apply_parameter_change(&env, &p.param_key, &p.new_value)?;
         storage::mark_parameter_proposal_status(
             &env,
             proposal_id,
             ParameterProposalStatus::Executed,
         );
+        storage::clear_review_approvals(&env, &p.param_key);
         events::parameter_change_executed(&env, proposal_id, &p.param_key);
         Ok(())
     }
@@ -7522,6 +7624,7 @@ impl ScoreGateScoreContract {
             service_signers.get(0).unwrap()
         };
         storage::mark_parameter_proposal_status(&env, proposal_id, ParameterProposalStatus::Vetoed);
+        storage::clear_review_approvals(&env, &p.param_key);
         events::parameter_change_vetoed(&env, proposal_id, &vetoer);
         Ok(())
     }
@@ -7539,6 +7642,11 @@ impl ScoreGateScoreContract {
     /// Returns the IDs of all proposals currently marked pending.
     pub fn get_pending_param_prop_ids(env: Env) -> Vec<u64> {
         storage::get_pending_parameter_proposal_ids(&env)
+    }
+
+    /// Returns the IDs of proposals tracked in the historical proposal index (capped at MAX_PARAMETER_PROPOSAL_HISTORY).
+    pub fn get_parameter_proposal_index(env: Env) -> Vec<u64> {
+        storage::get_parameter_proposal_index(&env)
     }
 
     /// Clean up expired parameter change proposals that have been expired for at least 48 hours.
@@ -7966,6 +8074,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -8763,6 +8872,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -8974,6 +9084,20 @@ impl ScoreGateScoreContract {
             return Err(Error::InvalidCooldown);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
+        let key = symbol_short!("cooldown");
+        let now = env.ledger().timestamp();
+        let apply_after = now.saturating_add(storage::get_param_change_delay(&env));
+        storage::set_pending_param_change(
+            &env,
+            &key,
+            &ParamChangeProposal {
+                new_value: ParamValue::U64(secs),
+                proposed_at: now,
+                apply_after,
+            },
+        );
+        storage::clear_review_approvals(&env, &key);
+        events::param_change_proposed(&env, &key, apply_after);
         storage::set_cooldown_secs(&env, secs);
         events::cooldown_updated(&env, secs);
         Ok(())
@@ -9344,6 +9468,11 @@ impl ScoreGateScoreContract {
     }
 
     /// Admin function to configure the score velocity cap.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InvalidArgument`] if `enabled` is true and `points_per_hour` is 0,
+    ///   or if `points_per_hour > 100`.
     pub fn set_score_velocity_cap(
         env: Env,
         admin_signers: Vec<Address>,
@@ -9352,6 +9481,9 @@ impl ScoreGateScoreContract {
     ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
+        }
+        if (enabled && points_per_hour == 0) || points_per_hour > 100 {
+            return Err(Error::InvalidArgument);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
 
@@ -9988,6 +10120,7 @@ impl ScoreGateScoreContract {
     /// - [`Error::NotInitialized`] if the contract has no admin.
     /// - [`Error::InvalidThreshold`] if min_epsilon or max_epsilon exceed
     ///   `DEFAULT_RISK_THRESHOLD` (75) or if min_epsilon > max_epsilon.
+    /// - [`Error::InvalidArgument`] if max_epsilon < min_epsilon + MIN_EPSILON_SPREAD.
     pub fn set_adaptive_epsilon_bounds(
         env: Env,
         admin_signers: Vec<Address>,
@@ -10003,6 +10136,9 @@ impl ScoreGateScoreContract {
         // Validate bounds
         if min_epsilon > max_epsilon {
             return Err(Error::InvalidThreshold);
+        }
+        if max_epsilon < min_epsilon.saturating_add(crate::constants::MIN_EPSILON_SPREAD) {
+            return Err(Error::InvalidArgument);
         }
         if max_epsilon > crate::constants::DEFAULT_RISK_THRESHOLD {
             return Err(Error::InvalidThreshold);
@@ -10134,16 +10270,21 @@ impl ScoreGateScoreContract {
     // ── Fee withdrawal ────────────────────────────────────────────────────────
 
     /// Sets the SEP-41 token contract address from which fees are withdrawn.
-    /// Must be called before `withdraw_fees` can succeed.  Admin only.
+    /// Must be called before `withdraw_fees` can succeed. Admin M-of-N
+    /// (see [`Self::require_admin_auth`]).
     ///
     /// # Errors
     /// - [`Error::NotInitialized`] if the contract has no admin yet.
-    pub fn set_fee_token(env: Env, token: Address) -> Result<(), Error> {
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if auth fails.
+    pub fn set_fee_token(
+        env: Env,
+        admin_signers: Vec<Address>,
+        token: Address,
+    ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
-        admin.require_auth();
+        Self::require_admin_auth(&env, &admin_signers)?;
         storage::set_fee_token(&env, &token);
         events::fee_token_set(&env, &token);
         Ok(())
@@ -12067,11 +12208,8 @@ impl ScoreGateScoreContract {
         let mut pair_buf = [0u8; 9];
         pair_buf[..pair_bytes.len()].copy_from_slice(pair_bytes);
 
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
-
-        let mut contract_buf = [0u8; 56];
-        env.current_contract_address().to_string().copy_into_slice(&mut contract_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(wallet);
+        let contract_buf = verkle::copy_address_to_56_bytes(&env.current_contract_address());
 
         let mut preimage = Bytes::new(env);
         preimage.extend_from_array(&wallet_buf);
@@ -13263,30 +13401,6 @@ impl ScoreGateScoreContract {
 
     // ── Verkle commitment internals ──────────────────────────────────────────
 
-    /// Persist a finalized `RiskScore` and update all derived state:
-    /// score storage, history ring, pair/wallet registration, counters,
-    /// and the Verkle commitment.  Called by `commit_pending_score` and the
-    /// internal single-submission path once all validation gates pass.
-    fn finalize_score_state(
-        env: &Env,
-        wallet: &Address,
-        asset_pair: &Symbol,
-        risk_score: &RiskScore,
-    ) -> Result<(), Error> {
-        let previous_score = storage::peek_score(env, wallet, asset_pair).map(|s| s.score);
-        storage::set_score(env, wallet, asset_pair, risk_score);
-        storage::push_score_history(env, wallet, asset_pair, risk_score);
-        storage::register_pair_for_wallet(env, wallet, asset_pair);
-        storage::increment_score_count(env, wallet, asset_pair);
-        storage::increment_pair_score_count(env, asset_pair);
-        if previous_score.is_none() {
-            storage::increment_total_wallets_scored(env);
-        }
-        Self::update_verkle_commitment(env, wallet, asset_pair, risk_score);
-        events::score_submitted(env, wallet, asset_pair, risk_score);
-        Ok(())
-    }
-
     /// Incrementally update the Verkle commitment when a score is written.
     ///
     /// Algorithm:
@@ -13306,8 +13420,7 @@ impl ScoreGateScoreContract {
         risk_score: &RiskScore,
     ) {
         // Derive z (evaluation point) for this key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(wallet);
 
         let pair_str = match SymbolStr::try_from_val(env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
@@ -13436,20 +13549,76 @@ impl ScoreGateScoreContract {
 
     // ── Architecture Ownership & Reviewer Routing ─────────────────────────────
 
-    pub fn set_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
-        // Requires authorization from current admin or existing arch owner
+    /// Proposes a new architecture owner (step 1 of 2).
+    /// Requires authorization from existing arch owner (if set) or contract admin.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    pub fn propose_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
         if let Some(current_owner) = storage::get_arch_owner(&env) {
             current_owner.require_auth();
         } else {
             storage::get_admin(&env).require_auth();
         }
 
-        storage::set_arch_owner(&env, &new_owner);
-
-        // Emit event for architecture ownership change
-        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), new_owner);
-
+        storage::set_pending_arch_owner(&env, &new_owner);
+        env.events().publish((Symbol::new(&env, "arch_owner_proposed"),), new_owner);
         Ok(())
+    }
+
+    /// Accepts pending architecture ownership (step 2 of 2).
+    /// Must be called by the address nominated via [`propose_arch_owner`](Self::propose_arch_owner).
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::NoPendingAdminTransfer`] if no architecture owner transfer is pending.
+    pub fn accept_arch_owner(env: Env) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        let pending = storage::get_pending_arch_owner(&env).ok_or(Error::NoPendingAdminTransfer)?;
+        pending.require_auth();
+
+        storage::set_arch_owner(&env, &pending);
+        storage::clear_pending_arch_owner(&env);
+        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), pending);
+        Ok(())
+    }
+
+    /// Emergency recovery override for architecture ownership by contract admin multisig.
+    /// Intervenes to recover ownership if the architecture owner key becomes unresponsive or lost.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if auth fails.
+    pub fn recover_arch_owner(
+        env: Env,
+        admin_signers: Vec<Address>,
+        new_owner: Address,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
+        storage::set_arch_owner(&env, &new_owner);
+        storage::clear_pending_arch_owner(&env);
+        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), new_owner);
+        Ok(())
+    }
+
+    /// Returns the pending architecture owner, or `None` if no transfer is in progress.
+    pub fn get_pending_arch_owner(env: Env) -> Option<Address> {
+        storage::get_pending_arch_owner(&env)
+    }
+
+    /// Initiates two-step architecture ownership transfer by proposing `new_owner`.
+    /// Ownership takes effect only once `new_owner` calls [`accept_arch_owner`](Self::accept_arch_owner).
+    /// Single-step immediate transfer is prevented to avoid accidental lockout.
+    pub fn set_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
+        Self::propose_arch_owner(env, new_owner)
     }
 
     pub fn get_arch_owner(env: Env) -> Option<Address> {
@@ -13490,6 +13659,62 @@ impl ScoreGateScoreContract {
 
     pub fn get_mandatory_reviewers(env: Env) -> Vec<Address> {
         storage::get_mandatory_reviewers(&env)
+    }
+
+    /// Record a mandatory technical reviewer's approval for a governance or
+    /// proposal target (`"upgrade"`, `"pol_bdl"`, or a parameter key such as
+    /// `"risk_thr"`, `"hist_dep"`, `"upg_dly"`, `"cooldown"`, `"stale_w"`).
+    ///
+    /// When [`get_mandatory_reviewers`](Self::get_mandatory_reviewers) is
+    /// non-empty, every configured mandatory reviewer must approve the target
+    /// before the corresponding proposal can be executed or applied.
+    pub fn approve_proposal_review(
+        env: Env,
+        reviewer: Address,
+        target: Symbol,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        let mandatory = storage::get_mandatory_reviewers(&env);
+        if !mandatory.contains(&reviewer) {
+            return Err(Error::ReviewerNotFound);
+        }
+        reviewer.require_auth();
+
+        let mut approvals = storage::get_review_approvals(&env, &target);
+        if !approvals.contains(&reviewer) {
+            approvals.push_back(reviewer.clone());
+            storage::set_review_approvals(&env, &target, &approvals);
+        }
+        events::proposal_review_approved(
+            &env,
+            &target,
+            &reviewer,
+            approvals.len(),
+            mandatory.len(),
+        );
+        Ok(())
+    }
+
+    /// Returns the list of mandatory reviewers that have approved `target`.
+    pub fn get_proposal_review_approvals(env: Env, target: Symbol) -> Vec<Address> {
+        storage::get_review_approvals(&env, &target)
+    }
+
+    fn require_mandatory_reviewers_approved(env: &Env, target: &Symbol) -> Result<(), Error> {
+        let mandatory = storage::get_mandatory_reviewers(env);
+        if mandatory.is_empty() {
+            return Ok(());
+        }
+        let approvals = storage::get_review_approvals(env, target);
+        for i in 0..mandatory.len() {
+            let reviewer = mandatory.get(i).unwrap();
+            if !approvals.contains(&reviewer) {
+                return Err(Error::MissingMandatoryReviewerApprovals);
+            }
+        }
+        Ok(())
     }
 
     // ── #631: Post-incident state checksum & reconciliation ───────────────────

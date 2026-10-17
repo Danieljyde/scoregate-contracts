@@ -3959,13 +3959,25 @@ fn test_arch_owner_management() {
     // Initial getter returns None
     assert_eq!(client.get_arch_owner(), None);
 
-    // Admin sets initial arch owner
-    client.set_arch_owner(&arch_owner_1);
-    assert_eq!(client.get_arch_owner(), Some(arch_owner_1.clone()));
+    // Admin proposes initial arch owner
+    client.propose_arch_owner(&arch_owner_1);
+    assert_eq!(client.get_pending_arch_owner(), Some(arch_owner_1.clone()));
+    assert_eq!(client.get_arch_owner(), None);
 
-    // Arch owner transfers to new arch owner
-    client.set_arch_owner(&arch_owner_2);
+    // Candidate accepts
+    client.accept_arch_owner();
+    assert_eq!(client.get_arch_owner(), Some(arch_owner_1.clone()));
+    assert_eq!(client.get_pending_arch_owner(), None);
+
+    // Arch owner proposes new arch owner
+    client.propose_arch_owner(&arch_owner_2);
+    assert_eq!(client.get_pending_arch_owner(), Some(arch_owner_2.clone()));
+    assert_eq!(client.get_arch_owner(), Some(arch_owner_1));
+
+    // New arch owner accepts
+    client.accept_arch_owner();
     assert_eq!(client.get_arch_owner(), Some(arch_owner_2));
+    assert_eq!(client.get_pending_arch_owner(), None);
 }
 
 #[test]

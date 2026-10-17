@@ -942,6 +942,7 @@ pub struct SubmissionProvenance {
 #[derive(Clone)]
 pub enum DataKeyE {
     SubmissionProvenance(Address, Symbol),
+    ParameterProposalIndex,
 }
 
 #[contracttype]

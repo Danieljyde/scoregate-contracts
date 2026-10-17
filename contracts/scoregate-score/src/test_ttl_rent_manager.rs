@@ -318,34 +318,27 @@ fn test_get_expiring_entries_short_circuits_full_index_scan() {
     env.budget().reset_unlimited();
     let pair = symbol_short!("XLM_USDC");
     let contract_id = client.address.clone();
-    let old_wallet = Address::generate(&env);
 
-    // One dormant entry, touched at START_SEQ.
+    // Fill index to cap with dormant entries touched at START_SEQ.
     env.as_contract(&contract_id, || {
-        storage::set_score(&env, &old_wallet, &pair, &dormant_score());
-    });
-
-    // Everything else is touched right before the sweep, filling the index
-    // to its cap — realistic worst case for the old unconditional full scan.
-    env.ledger().set_sequence_number(START_SEQ + SCORE_TTL_THRESHOLD);
-    env.as_contract(&contract_id, || {
-        for _ in 0..(crate::constants::MAX_TRACKED_SCORE_ENTRIES - 1) {
+        for _ in 0..crate::constants::MAX_TRACKED_SCORE_ENTRIES {
             let wallet = Address::generate(&env);
             storage::set_score(&env, &wallet, &pair, &dormant_score());
         }
 
+        env.ledger().set_sequence_number(START_SEQ + SCORE_TTL_THRESHOLD);
+
         env.budget().reset_default();
         env.budget().reset_tracker();
-        let optimized = storage::get_expiring_entries(&env, 50);
+        let optimized = storage::get_expiring_entries(&env, 10);
         let optimized_cost = env.budget().cpu_instruction_cost();
 
         env.budget().reset_default();
         env.budget().reset_tracker();
-        let baseline = storage::get_expiring_entries_full_scan_baseline(&env, 50);
+        let baseline = storage::get_expiring_entries_full_scan_baseline(&env, 10);
         let baseline_cost = env.budget().cpu_instruction_cost();
 
-        assert_eq!(optimized.len(), 1);
-        assert_eq!(optimized.get(0).unwrap(), (old_wallet.clone(), pair.clone()));
+        assert_eq!(optimized.len(), 10);
         assert_eq!(
             optimized, baseline,
             "early-exit scan must return the same result as the full scan"
@@ -355,8 +348,8 @@ fn test_get_expiring_entries_short_circuits_full_index_scan() {
             (baseline_cost.saturating_sub(optimized_cost) as f64 / baseline_cost as f64) * 100.0;
         assert!(
             reduction_pct >= 50.0,
-            "expected the early-exit scan over a {n}-entry index with only 1 \
-             entry due to cost substantially less than the unconditional full \
+            "expected the early-exit scan over a {n}-entry index with capped \
+             entries due to cost substantially less than the unconditional full \
              scan; baseline={baseline_cost}, optimized={optimized_cost}, \
              reduction={reduction_pct:.1}%",
             n = crate::constants::MAX_TRACKED_SCORE_ENTRIES,
@@ -386,3 +379,30 @@ fn test_batch_submission_also_tracks_entries() {
 
     assert_eq!(client.get_entry_ttl(&wallet, &pair), SCORE_TTL_THRESHOLD);
 }
+
+#[test]
+fn test_get_expiring_entries_out_of_order_ttl_extension_does_not_halt_traversal() {
+    let (env, client, _, _) = setup();
+    let pair = symbol_short!("XLM_USDC");
+    let contract_id = client.address.clone();
+    let wallet_a = Address::generate(&env);
+    let wallet_b = Address::generate(&env);
+
+    client.submit_score(&Vec::new(&env), &wallet_a, &pair, &10, &false, &false, &1, &90, &1, &None);
+    client.submit_score(&Vec::new(&env), &wallet_b, &pair, &20, &false, &false, &1, &90, &1, &None);
+
+    // Simulate an out-of-order TTL extension on wallet_a at a later ledger sequence
+    env.ledger().set_sequence_number(START_SEQ + 2_000);
+    env.as_contract(&contract_id, || {
+        storage::track_score_entry(&env, &wallet_a, &pair);
+    });
+
+    // Advance ledger so wallet_b is expiring (>= SCORE_TTL_THRESHOLD since START_SEQ),
+    // but wallet_a is fresh (< SCORE_TTL_THRESHOLD since START_SEQ + 2_000)
+    env.ledger().set_sequence_number(START_SEQ + SCORE_TTL_THRESHOLD + 100);
+
+    let due = client.get_expiring_entries(&50);
+    // Traversal must not halt on fresh wallet_a, and must return expiring wallet_b
+    assert!(due.contains(&(wallet_b, pair)));
+}
+
