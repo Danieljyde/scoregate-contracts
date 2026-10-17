@@ -148,7 +148,14 @@ impl EventStabilityRegistry {
             "prm_exec" => EventStability::OperatorDiagnostic,
             "prm_veto" => EventStability::OperatorDiagnostic,
             "pc_prop" => EventStability::OperatorDiagnostic, // Param change proposed
+            "pc_appl" => EventStability::OperatorDiagnostic, // Param change applied
             "param_change_proposed" => EventStability::OperatorDiagnostic,
+            "param_change_applied" => EventStability::OperatorDiagnostic,
+            "pbdl_prop" => EventStability::OperatorDiagnostic,
+            "pbdl_appl" => EventStability::OperatorDiagnostic,
+            "pbdl_veto" => EventStability::OperatorDiagnostic,
+            "policy_bundle_vetoed" => EventStability::OperatorDiagnostic,
+            "rev_appr" => EventStability::OperatorDiagnostic,
 
             // Scoring analytics
             "mom_cross" => EventStability::OperatorDiagnostic, // Momentum threshold crossed
