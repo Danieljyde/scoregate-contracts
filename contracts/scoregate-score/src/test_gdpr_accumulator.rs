@@ -60,7 +60,7 @@
 
 extern crate std;
 
-use soroban_sdk::{Address, Bytes, Env, Symbol};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Bytes, Env, Symbol, Vec as SorobanVec};
 use std::vec::Vec as StdVec;
 
 const LEAF_DOMAIN: u8 = 0x00;
@@ -487,4 +487,75 @@ fn test_deletion_witness_soundness_fuzz() {
             }
         }
     }
+}
+
+// ── Contagion cleanup on score deletion (#183) ───────────────────────────────
+
+#[test]
+fn test_clear_score_cleans_up_counterparty_links_and_contagion() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, crate::ScoreGateScoreContract);
+    let client = crate::ScoreGateScoreContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let service = Address::generate(&env);
+    client.initialize(&admin, &service);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    // 1. Submit scores for alice and bob
+    client.submit_score(
+        &SorobanVec::new(&env),
+        &alice,
+        &pair,
+        &50,
+        &false,
+        &false,
+        &1,
+        &90,
+        &1,
+        &None,
+    );
+    client.submit_score(
+        &SorobanVec::new(&env),
+        &bob,
+        &pair,
+        &60,
+        &false,
+        &false,
+        &1,
+        &90,
+        &1,
+        &None,
+    );
+
+    // 2. Link alice and bob
+    client.add_counterparty_link(&alice, &bob, &pair);
+    assert_eq!(client.get_counterparty_list(&alice, &pair), SorobanVec::from_array(&env, [bob.clone()]));
+    assert_eq!(client.get_counterparty_list(&bob, &pair), SorobanVec::from_array(&env, [alice.clone()]));
+
+    // 3. Clear bob's score (GDPR wipe)
+    client.clear_score(&SorobanVec::new(&env), &bob, &pair);
+
+    // Bob's score is wiped
+    assert_eq!(client.try_get_score(&bob, &pair), Err(Ok(crate::Error::ScoreNotFound)));
+
+    // Reciprocal link from alice to bob is cleaned up!
+    let alice_cps = client.get_counterparty_list(&alice, &pair);
+    assert_eq!(alice_cps.len(), 0, "Alice should no longer have Bob as counterparty");
+
+    // Bob's counterparty list is cleaned up!
+    let bob_cps = client.get_counterparty_list(&bob, &pair);
+    assert_eq!(bob_cps.len(), 0, "Bob's counterparty list should be empty");
+
+    // 4. Propagating contagion from alice does not affect or propagate to erased bob
+    let affected = client.propagate_contagion(&SorobanVec::new(&env), &alice, &pair, &20);
+    assert_eq!(affected, 0, "Contagion should affect 0 counterparties since link was cleaned up");
+
+    // Bob still has no score
+    assert_eq!(client.try_get_score(&bob, &pair), Err(Ok(crate::Error::ScoreNotFound)));
 }

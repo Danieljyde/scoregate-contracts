@@ -1266,6 +1266,7 @@ pub fn clear_score(env: &Env, wallet: &Address, asset_pair: &Symbol) {
         .remove(&DataKeyD::TokenBucket(wallet.clone(), asset_pair.clone()));
     remove_pair_for_wallet(env, wallet, asset_pair);
     remove_score_entry(env, wallet, asset_pair);
+    clear_counterparty_links(env, wallet, asset_pair);
 }
 
 pub fn get_deletion_approval_policy(env: &Env) -> DeletionApprovalPolicy {
@@ -1757,6 +1758,26 @@ pub fn remove_counterparty_link(
     }
 
     Ok(())
+}
+
+pub fn clear_counterparty_links(env: &Env, wallet: &Address, asset_pair: &Symbol) {
+    let counterparties = get_counterparties(env, wallet, asset_pair);
+    for i in 0..counterparties.len() {
+        let cp = counterparties.get(i).unwrap();
+        let mut cp_links = get_counterparties(env, &cp, asset_pair);
+        if let Some(pos) = cp_links.first_index_of(wallet) {
+            cp_links.remove(pos);
+            let key_cp = DataKey::Counterparties(cp.clone(), asset_pair.clone());
+            if cp_links.is_empty() {
+                env.storage().persistent().remove(&key_cp);
+            } else {
+                env.storage().persistent().set(&key_cp, &cp_links);
+                env.storage().persistent().extend_ttl(&key_cp, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
+            }
+        }
+    }
+    let key = DataKey::Counterparties(wallet.clone(), asset_pair.clone());
+    env.storage().persistent().remove(&key);
 }
 
 pub fn get_contagion_depth(env: &Env, wallet: &Address, asset_pair: &Symbol) -> u32 {

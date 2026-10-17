@@ -11,8 +11,8 @@
 
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
-    Address, BytesN, Env, Symbol, Vec,
+    testutils::{Address as _, Events as _, Ledger as _},
+    Address, BytesN, Env, Symbol, TryFromVal as _, Vec,
 };
 
 use crate::{Error, ScoreGateScoreContract, ScoreGateScoreContractClient};
@@ -425,4 +425,122 @@ fn test_freeze_blocks_batch_submit() {
 
     let result = client.try_submit_scores_batch(&Vec::new(&env), &Vec::new(&env));
     assert_eq!(result, Err(Ok(Error::EmptyBatch)));
+}
+
+// ── Restore Backup Snapshot & Invariant Verification (#184) ───────────────────
+
+#[test]
+fn test_restore_backup_snapshot_success() {
+    let (env, client, admin, service) = initialized();
+    let wallet1 = Address::generate(&env);
+    let wallet2 = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    submit_dummy_score(&env, &client, &wallet1, &pair);
+    submit_dummy_score(&env, &client, &wallet2, &pair);
+
+    let snapshot = client.try_compute_state_checksum(&Vec::new(&env)).unwrap().unwrap();
+    let entries = client.export_all_scores_paginated(&0, &10);
+    assert_eq!(entries.len(), 2);
+
+    // Deploy and initialize a fresh contract to restore into
+    let contract_id_b = env.register_contract(None, ScoreGateScoreContract);
+    let client_b = ScoreGateScoreContractClient::new(&env, &contract_id_b);
+    client_b.initialize(&admin, &service);
+
+    // Restore snapshot into client_b
+    let restore_res = client_b.try_restore_backup_snapshot(&Vec::new(&env), &snapshot, &entries);
+    assert!(restore_res.is_ok());
+
+    // Verify state checksum matches
+    let verified = client_b.verify_state_checksum(&snapshot);
+    assert!(verified, "Restored state checksum must match original snapshot");
+
+    // Verify scores exist in restored contract
+    assert_eq!(client_b.get_score(&wallet1, &pair).score, 42);
+    assert_eq!(client_b.get_score(&wallet2, &pair).score, 42);
+
+    // Verify backup restore event was emitted
+    let events = env.events().all();
+    let mut found = false;
+    for i in 0..events.len() {
+        let e = events.get(i).unwrap();
+        let topic_tuple: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
+        if topic_tuple.len() > 0 {
+            if let Ok(sym) = soroban_sdk::Symbol::try_from_val(&env, &topic_tuple.get(0).unwrap()) {
+                if sym == symbol_short!("bk_rest") {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(found, "backup_restored event must be emitted");
+}
+
+#[test]
+fn test_restore_backup_snapshot_corrupted_score_aborts() {
+    let (env, client, admin, service) = initialized();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit_dummy_score(&env, &client, &wallet, &pair);
+
+    let snapshot = client.try_compute_state_checksum(&Vec::new(&env)).unwrap().unwrap();
+    let mut entries = client.export_all_scores_paginated(&0, &10);
+
+    // Corrupt entry with score > 100
+    let mut entry = entries.get(0).unwrap();
+    entry.score = 150;
+    entries.set(0, entry);
+
+    let contract_id_b = env.register_contract(None, ScoreGateScoreContract);
+    let client_b = ScoreGateScoreContractClient::new(&env, &contract_id_b);
+    client_b.initialize(&admin, &service);
+
+    let restore_res = client_b.try_restore_backup_snapshot(&Vec::new(&env), &snapshot, &entries);
+    assert!(restore_res.is_err(), "Corrupt score > 100 must abort");
+}
+
+#[test]
+fn test_restore_backup_snapshot_mismatched_score_root_aborts() {
+    let (env, client, admin, service) = initialized();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit_dummy_score(&env, &client, &wallet, &pair);
+
+    let snapshot = client.try_compute_state_checksum(&Vec::new(&env)).unwrap().unwrap();
+    let mut entries = client.export_all_scores_paginated(&0, &10);
+
+    // Corrupt entry score to valid value but one that alters the score root
+    let mut entry = entries.get(0).unwrap();
+    entry.score = 99;
+    entries.set(0, entry);
+
+    let contract_id_b = env.register_contract(None, ScoreGateScoreContract);
+    let client_b = ScoreGateScoreContractClient::new(&env, &contract_id_b);
+    client_b.initialize(&admin, &service);
+
+    let restore_res = client_b.try_restore_backup_snapshot(&Vec::new(&env), &snapshot, &entries);
+    assert_eq!(restore_res, Err(Ok(Error::CommitmentMismatch)), "Divergent score root must abort");
+}
+
+#[test]
+fn test_restore_backup_snapshot_mismatched_entry_count_aborts() {
+    let (env, client, admin, service) = initialized();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    submit_dummy_score(&env, &client, &wallet, &pair);
+
+    let snapshot = client.try_compute_state_checksum(&Vec::new(&env)).unwrap().unwrap();
+    let mut entries = client.export_all_scores_paginated(&0, &10);
+
+    // Pop the only entry so count doesn't match snapshot.entry_count
+    entries.pop_back();
+
+    let contract_id_b = env.register_contract(None, ScoreGateScoreContract);
+    let client_b = ScoreGateScoreContractClient::new(&env, &contract_id_b);
+    client_b.initialize(&admin, &service);
+
+    let restore_res = client_b.try_restore_backup_snapshot(&Vec::new(&env), &snapshot, &entries);
+    assert!(restore_res.is_err(), "Mismatched entry count must abort");
 }

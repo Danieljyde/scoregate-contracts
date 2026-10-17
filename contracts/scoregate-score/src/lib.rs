@@ -151,8 +151,11 @@ mod test_dispute;
 // #[cfg(test)]
 // mod test_model_version;
 
-// #[cfg(test)]
-// mod test_histogram;
+#[cfg(test)]
+mod test_histogram;
+
+#[cfg(test)]
+mod test_confidence_gate;
 
 #[cfg(test)]
 mod test_failover;
@@ -2926,7 +2929,7 @@ impl ScoreGateScoreContract {
         if !(50..=99).contains(&target_percentile) {
             return Err(Error::InvalidPercentile);
         }
-        if min_value > max_value {
+        if min_value > max_value || max_value > 100 {
             return Err(Error::InvalidThreshold);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
@@ -2935,6 +2938,7 @@ impl ScoreGateScoreContract {
         storage::set_adaptive_threshold_target_percentile(&env, target_percentile);
         storage::set_adaptive_threshold_min_value(&env, min_value);
         storage::set_adaptive_threshold_max_value(&env, max_value);
+        events::adaptive_threshold_enabled(&env, target_percentile, min_value, max_value);
 
         Ok(())
     }
@@ -2993,13 +2997,38 @@ impl ScoreGateScoreContract {
     /// assert_eq!(threshold, 50); // Falls back to min since no histogram
     /// ```
     pub fn recompute_adaptive_threshold(env: Env) -> Result<u32, Error> {
-        // TODO: Once histogram feature (issue #81) is implemented, use that here
-        // For now, fall back to min_value (or static if no config)
         let min_value = storage::get_adaptive_threshold_min_value(&env);
         let max_value = storage::get_adaptive_threshold_max_value(&env);
-        let mut new_threshold = min_value;
+        let target_pct = storage::get_adaptive_threshold_target_percentile(&env);
+        let histogram = storage::get_score_histogram(&env);
+        let total = histogram.total;
 
-        // Clamp to min/max
+        let mut new_threshold = min_value;
+        if total > 0 && target_pct > 0 {
+            let mut cumulative: u64 = 0;
+            for i in 0..10u32 {
+                let count = histogram.buckets.get(i).unwrap_or(0);
+                if count == 0 {
+                    continue;
+                }
+                let prev_cum = cumulative;
+                cumulative = cumulative.saturating_add(count);
+                if cumulative.saturating_mul(100) >= (target_pct as u64).saturating_mul(total) {
+                    let bin_low = i.saturating_mul(10);
+                    let needed = (target_pct as u64)
+                        .saturating_mul(total)
+                        .saturating_sub(prev_cum.saturating_mul(100));
+                    let bin_fraction = needed
+                        .saturating_mul(10)
+                        / count.saturating_mul(100).max(1);
+                    let score = bin_low.saturating_add(bin_fraction as u32);
+                    new_threshold = score.min(100);
+                    break;
+                }
+            }
+        }
+
+        // Clamp to [min_value, max_value]
         new_threshold = new_threshold.max(min_value).min(max_value);
 
         let old_threshold = storage::get_last_computed_threshold(&env);
@@ -5580,6 +5609,8 @@ impl ScoreGateScoreContract {
             || capability == Symbol::new(&env, "export_score")
             || capability == symbol_short!("freeze")
             || capability == symbol_short!("arch")
+            || capability == symbol_short!("restore")
+            || capability == Symbol::new(&env, "restore")
     }
 
     // ── Service management ───────────────────────────────────────────────────
@@ -13880,6 +13911,83 @@ impl ScoreGateScoreContract {
 
         let _ = entries_matched; // suppress unused warning — used by event
         Ok(report)
+    }
+
+    /// Restores contract state from a pre-computed signed snapshot and score entries.
+    ///
+    /// Unpacks and writes state items to persistent storage, performs explicit
+    /// structural consistency assertions, runs formal invariant checks,
+    /// records the backup restoration record, and emits [`events::backup_restored`].
+    /// Admin only.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::Unauthorized`] if caller is not an admin signer.
+    /// - [`Error::InvalidScore`] if entry count or scores/confidences are invalid.
+    /// - [`Error::CommitmentMismatch`] if restored score root diverges from snapshot.
+    pub fn restore_backup_snapshot(
+        env: Env,
+        admin_signers: Vec<Address>,
+        snapshot: types::StateSnapshot,
+        entries: Vec<types::ExportableScoreEntry>,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
+        let admin = storage::get_admin(&env);
+
+        // 1. Explicit structural consistency assertions: entry count check
+        if entries.len() != snapshot.entry_count {
+            return Err(Error::InvalidScore);
+        }
+
+        // 2. Unpack and write state items to persistent storage
+        for i in 0..entries.len() {
+            let entry = entries.get(i).unwrap();
+            // Validate individual score and confidence bounds
+            if entry.score > 100 || entry.confidence > 100 {
+                return Err(Error::InvalidScore);
+            }
+            let risk_score = RiskScore {
+                score: entry.score,
+                benford_flag: entry.benford_flag,
+                ml_flag: entry.ml_flag,
+                timestamp: entry.timestamp,
+                confidence: entry.confidence,
+                model_version: entry.model_version,
+                benford_score: entry.benford_score,
+                ml_score: entry.ml_score,
+                network_score: entry.network_score,
+                commitment: None,
+            };
+            storage::set_score(&env, &entry.wallet, &entry.asset_pair, &risk_score);
+            storage::register_pair_for_wallet(&env, &entry.wallet, &entry.asset_pair);
+            storage::update_histogram_on_write(&env, None, entry.score);
+        }
+
+        // 3. Structural consistency assertion: recomputed score root must match snapshot.score_root
+        let (computed_score_root, entry_count) = storage::compute_score_root(&env);
+        if computed_score_root != snapshot.score_root || entry_count != snapshot.entry_count {
+            return Err(Error::CommitmentMismatch);
+        }
+
+        // 4. Formal invariant verification in test/debug environments
+        #[cfg(any(test, feature = "testutils"))]
+        invariants::invariant_check(&env);
+
+        // 5. Record backup restore audit record & emit event
+        let record = types::BackupRecord {
+            score_root: snapshot.score_root.clone(),
+            entry_count,
+            restored_at: env.ledger().timestamp(),
+            restored_by: admin.clone(),
+            justification_hash: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        storage::set_backup_restore_record(&env, &record);
+        events::backup_restored(&env, &snapshot.score_root, entry_count, &admin);
+
+        Ok(())
     }
 
     /// Returns `true` if the oracle registered for `asset_pair` is considered

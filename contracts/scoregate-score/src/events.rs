@@ -510,6 +510,19 @@ pub fn adaptive_threshold_updated(env: &Env, new_threshold: u32) {
     env.events().publish((symbol_short!("at_upd"),), new_threshold);
 }
 
+/// Emitted when adaptive threshold mode is enabled.
+pub fn adaptive_threshold_enabled(
+    env: &Env,
+    target_percentile: u32,
+    min_value: u32,
+    max_value: u32,
+) {
+    env.events().publish(
+        (symbol_short!("at_enab"),),
+        (target_percentile, min_value, max_value),
+    );
+}
+
 pub fn counterparty_link_added(
     env: &Env,
     wallet_a: &Address,

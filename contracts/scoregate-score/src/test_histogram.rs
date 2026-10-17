@@ -1,7 +1,7 @@
-﻿use soroban_sdk::{
+use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
-    Address, Env, Vec,
+    testutils::{Address as _, Events as _, Ledger as _},
+    Address, Env, TryFromVal as _, Vec,
 };
 
 use crate::{Error, ScoreGateScoreContract, ScoreGateScoreContractClient, ScoreHistogram};
@@ -271,4 +271,116 @@ fn test_percentile_score_not_found() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     assert_eq!(client.try_get_score_percentile(&wallet, &pair), Err(Ok(Error::ScoreNotFound)));
+}
+
+// ── Adaptive Threshold Dynamic Recomputation (#185) ──────────────────────────
+
+#[test]
+fn test_recompute_adaptive_threshold_falls_back_without_histogram() {
+    let (env, client, _admin, _service) = initialized();
+    client.enable_adaptive_threshold(&Vec::new(&env), &90, &50, &95);
+    let threshold = client.recompute_adaptive_threshold();
+    assert_eq!(threshold, 50); // No histogram data -> fallback to min_value
+}
+
+#[test]
+fn test_recompute_adaptive_threshold_calculates_from_histogram() {
+    let (env, client, _admin, _service) = initialized();
+    let pair = symbol_short!("XLM_USDC");
+
+    // Submit scores spanning buckets 0 to 9: 5, 15, 25, 35, 45, 55, 65, 75, 85, 95
+    for i in 0..10u32 {
+        let wallet = Address::generate(&env);
+        client.submit_score(
+            &Vec::new(&env),
+            &wallet,
+            &pair,
+            &(i * 10 + 5),
+            &false,
+            &false,
+            &1,
+            &90,
+            &1,
+            &None,
+        );
+    }
+
+    // 80th percentile on 10 scores
+    client.enable_adaptive_threshold(&Vec::new(&env), &80, &20, &95);
+    let threshold = client.recompute_adaptive_threshold();
+    assert_eq!(threshold, 80);
+}
+
+#[test]
+fn test_recompute_adaptive_threshold_clamps_to_min() {
+    let (env, client, _admin, _service) = initialized();
+    let pair = symbol_short!("XLM_USDC");
+
+    // Submit single low score in bucket 0
+    let wallet = Address::generate(&env);
+    client.submit_score(&Vec::new(&env), &wallet, &pair, &5, &false, &false, &1, &90, &1, &None);
+
+    // Percentile would be ~5, but min_value is 40 -> clamp to 40
+    client.enable_adaptive_threshold(&Vec::new(&env), &50, &40, &90);
+    let threshold = client.recompute_adaptive_threshold();
+    assert_eq!(threshold, 40);
+}
+
+#[test]
+fn test_recompute_adaptive_threshold_clamps_to_max() {
+    let (env, client, _admin, _service) = initialized();
+    let pair = symbol_short!("XLM_USDC");
+
+    // Submit single high score in bucket 9
+    let wallet = Address::generate(&env);
+    client.submit_score(&Vec::new(&env), &wallet, &pair, &95, &false, &false, &1, &90, &1, &None);
+
+    // Percentile would be ~99, but max_value is 70 -> clamp to 70
+    client.enable_adaptive_threshold(&Vec::new(&env), &90, &20, &70);
+    let threshold = client.recompute_adaptive_threshold();
+    assert_eq!(threshold, 70);
+}
+
+#[test]
+fn test_recompute_adaptive_threshold_emits_event_on_change() {
+    let (env, client, _admin, _service) = initialized();
+    let pair = symbol_short!("XLM_USDC");
+
+    for i in 0..5u32 {
+        let wallet = Address::generate(&env);
+        client.submit_score(
+            &Vec::new(&env),
+            &wallet,
+            &pair,
+            &(i * 20 + 10),
+            &false,
+            &false,
+            &1,
+            &90,
+            &1,
+            &None,
+        );
+    }
+
+    client.enable_adaptive_threshold(&Vec::new(&env), &80, &30, &90);
+    let threshold = client.recompute_adaptive_threshold();
+    assert!(threshold >= 30 && threshold <= 90);
+
+    let events = env.events().all();
+    let mut found = false;
+    for i in 0..events.len() {
+        let e = events.get(i).unwrap();
+        let topic_tuple: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
+        if topic_tuple.len() > 0 {
+            if let Ok(sym) = soroban_sdk::Symbol::try_from_val(&env, &topic_tuple.get(0).unwrap()) {
+                if sym == symbol_short!("at_upd") {
+                    let new_t: u32 = soroban_sdk::TryFromVal::try_from_val(&env, &e.2).unwrap();
+                    assert_eq!(new_t, threshold);
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(found, "adaptive_threshold_updated event must be emitted");
 }
