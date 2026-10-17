@@ -27,6 +27,7 @@ pub const MAX_MANDATORY_REVIEWERS: u32 = 10;
 enum ArchitectureDataKey {
     ArchOwner,
     MandatoryReviewers,
+    ReviewApprovals(Symbol),
 }
 
 // ── Admin / Service ─────────────────────────────────────────────────────────
@@ -2876,6 +2877,9 @@ pub fn set_oracle_staleness_threshold(env: &Env, threshold_secs: u64) {
 // ── Epoch sealing (issue #301) ────────────────────────────────────────────────
 
 pub fn is_epoch_open(env: &Env) -> bool {
+    if !has_admin(env) {
+        return false;
+    }
     env.storage().instance().get(&DataKeyD::EpochOpen).unwrap_or(true)
 }
 
@@ -3204,6 +3208,21 @@ pub fn get_mandatory_reviewers(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| Vec::new(env))
 }
 
+pub fn get_review_approvals(env: &Env, target: &Symbol) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&ArchitectureDataKey::ReviewApprovals(target.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_review_approvals(env: &Env, target: &Symbol, approvals: &Vec<Address>) {
+    env.storage().instance().set(&ArchitectureDataKey::ReviewApprovals(target.clone()), approvals);
+}
+
+pub fn clear_review_approvals(env: &Env, target: &Symbol) {
+    env.storage().instance().remove(&ArchitectureDataKey::ReviewApprovals(target.clone()));
+}
+
 pub fn set_submission_provenance(
     env: &Env,
     wallet: &Address,
@@ -3261,34 +3280,6 @@ pub fn set_signer_state_record(env: &Env, record: &SignerStateRecord) {
 
 pub fn get_signer_state_record(env: &Env, signer: &Address) -> Option<SignerStateRecord> {
     env.storage().persistent().get(&DataKeyD::SignerState(signer.clone()))
-}
-
-/// Grace period for signer state changes, defaulting to 1 hour.
-///
-/// Restored after the `ledgerlens-score` -> `scoregate-score` package rename
-/// dropped it, which left `governance_helpers.rs` calling a function that did not
-/// exist and broke the build.
-pub fn get_signer_grace_period_secs(env: &Env) -> u64 {
-    env.storage()
-        .instance()
-        .get(&DataKeyD::SignerGracePeriodSecs)
-        .unwrap_or(crate::constants::DEFAULT_SIGNER_GRACE_PERIOD_SECS)
-}
-
-pub fn set_signer_grace_period_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKeyD::SignerGracePeriodSecs, &secs);
-}
-
-/// Signer addresses eligible to sign, in priority order.
-pub fn get_active_signer_index(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&DataKeyD::ActiveSignerIndex)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-pub fn set_active_signer_index(env: &Env, signers: &Vec<Address>) {
-    env.storage().instance().set(&DataKeyD::ActiveSignerIndex, signers);
 }
 
 // ── #631: Emergency freeze / thaw ──────────────────────────────────────────

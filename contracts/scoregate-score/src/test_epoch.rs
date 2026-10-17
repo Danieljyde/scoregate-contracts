@@ -1,6 +1,10 @@
 //! Tests for #301: score epoch sealing.
 
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Vec};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Ledger as _},
+    Address, Env, Symbol, TryFromVal, Vec,
+};
 
 use crate::{Error, ScoreGateScoreContract, ScoreGateScoreContractClient};
 
@@ -31,6 +35,7 @@ fn submit(client: &ScoreGateScoreContractClient, env: &Env, wallet: &Address) ->
             &1,
             &None,
         )
+        .map(|_| ())
         .map_err(|e| e.unwrap())
 }
 
@@ -127,18 +132,53 @@ fn test_get_current_epoch_persists_after_close_of_nonzero_epoch() {
     assert_eq!(client.get_current_epoch(), 7);
 }
 
-// is_epoch_open has no NotInitialized guard (unlike open_epoch/close_epoch) —
-// it reads straight from storage, which falls back to `true` via
-// `unwrap_or(true)` when EpochOpen has never been written. Every other test
-// in this file calls setup(), which always initializes the contract, so the
-// pre-initialize / never-set-yet default was never asserted directly. This
-// pins that default down instead of just asserting "doesn't panic".
+// Before contract initialization, `is_epoch_open` must return `false` (#221).
 #[test]
-fn test_is_epoch_open_defaults_true_before_initialize() {
+fn test_is_epoch_open_returns_false_before_initialize() {
     let env = Env::default();
     env.mock_all_auths();
     let id = env.register_contract(None, ScoreGateScoreContract);
     let client = ScoreGateScoreContractClient::new(&env, &id);
 
+    assert!(!client.is_epoch_open());
+}
+
+#[test]
+fn test_close_epoch_already_closed_fails_and_emits_no_event() {
+    use soroban_sdk::testutils::Events;
+
+    let (env, client) = setup();
+    client.open_epoch(&Vec::new(&env), &3);
     assert!(client.is_epoch_open());
+
+    // First close succeeds and emits one `ep_close` event.
+    client.close_epoch(&Vec::new(&env));
+    assert!(!client.is_epoch_open());
+
+    let close_events_before = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            e.1.get(0).and_then(|v| Symbol::try_from_val(&env, &v).ok())
+                == Some(symbol_short!("epo_cls"))
+        })
+        .count();
+    assert_eq!(close_events_before, 1);
+
+    // Second close on an already-closed epoch fails with EpochAlreadyClosed
+    // and emits no additional `epo_cls` event.
+    let res = client.try_close_epoch(&Vec::new(&env));
+    assert_eq!(res, Err(Ok(Error::EpochAlreadyClosed)));
+
+    let close_events_after = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            e.1.get(0).and_then(|v| Symbol::try_from_val(&env, &v).ok())
+                == Some(symbol_short!("epo_cls"))
+        })
+        .count();
+    assert_eq!(close_events_after, 1);
 }

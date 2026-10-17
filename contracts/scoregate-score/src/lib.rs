@@ -237,6 +237,15 @@ mod test_schema_version_probes;
 #[cfg(test)]
 mod test_dos_read_patterns;
 
+#[cfg(test)]
+mod test_epoch;
+
+#[cfg(test)]
+mod test_policy_bundles;
+
+#[cfg(test)]
+mod test_governance;
+
 use soroban_sdk::{
     contract, contractimpl, crypto::Hash, symbol_short, token, Address, Bytes, BytesN, Env,
     IntoVal, Symbol, SymbolStr, TryFromVal, Vec,
@@ -3610,6 +3619,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -3617,17 +3627,20 @@ impl ScoreGateScoreContract {
     /// Applies a pending simple parameter change (proposed via
     /// `set_risk_threshold`, `set_history_max_depth`, `set_upgrade_delay`,
     /// `set_cooldown`, or `set_staleness_window`) once its time-lock delay
-    /// has elapsed. Callable by anyone — the only gate is `apply_after <= now`.
+    /// has elapsed. When mandatory reviewers are configured, all mandatory
+    /// reviewers must have approved `key` before application can succeed.
     ///
     /// # Errors
     /// - [`Error::NoPendingUpgrade`] if no change is pending for `key`.
     /// - [`Error::UpgradeNotReady`] if `apply_after > now`.
+    /// - [`Error::MissingMandatoryReviewerApprovals`] if mandatory reviewers are configured and have not all approved `key`.
     pub fn apply_param_change(env: Env, key: Symbol) -> Result<(), Error> {
         let pending =
             storage::get_pending_param_change(&env, &key).ok_or(Error::NoPendingUpgrade)?;
         if env.ledger().timestamp() < pending.apply_after {
             return Err(Error::UpgradeNotReady);
         }
+        Self::require_mandatory_reviewers_approved(&env, &key)?;
         match &pending.new_value {
             ParamValue::U32(v) if key == symbol_short!("risk_thr") => {
                 storage::set_risk_threshold(&env, *v)
@@ -3638,12 +3651,18 @@ impl ScoreGateScoreContract {
             ParamValue::U64(v) if key == symbol_short!("upg_dly") => {
                 storage::set_upgrade_delay(&env, *v)
             }
+            ParamValue::U64(v) if key == symbol_short!("cooldown") => {
+                storage::set_cooldown_secs(&env, *v);
+                events::cooldown_updated(&env, *v);
+            }
             ParamValue::U64(v) if key == symbol_short!("stale_w") => {
                 storage::set_staleness_window(&env, *v)
             }
             _ => return Err(Error::InvalidParameterKey),
         }
         storage::clear_pending_param_change(&env, &key);
+        storage::clear_review_approvals(&env, &key);
+        events::param_change_applied(&env, &key, pending.new_value);
         Ok(())
     }
 
@@ -3693,6 +3712,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &symbol_short!("pol_bdl"));
         events::policy_bundle_proposed(&env, risk_threshold, cooldown_secs, apply_after);
         Ok(())
     }
@@ -3700,25 +3720,54 @@ impl ScoreGateScoreContract {
     /// Applies a pending policy bundle once its time-lock delay has
     /// elapsed, writing the risk threshold and cooldown together in the
     /// same call so no caller can ever observe one field updated and the
-    /// other still pending. Callable by anyone — the only gate is
-    /// `apply_after <= now`, matching [`Self::apply_param_change`].
+    /// other still pending. When mandatory reviewers are configured, all
+    /// mandatory reviewers must have approved `"pol_bdl"` before application.
     ///
     /// # Errors
     /// - [`Error::NoPendingUpgrade`] if no bundle is pending.
     /// - [`Error::UpgradeNotReady`] if `apply_after > now`.
+    /// - [`Error::MissingMandatoryReviewerApprovals`] if mandatory reviewers are configured and have not all approved `"pol_bdl"`.
     pub fn apply_policy_bundle(env: Env) -> Result<(), Error> {
         let pending = storage::get_pending_policy_bundle(&env).ok_or(Error::NoPendingUpgrade)?;
         if env.ledger().timestamp() < pending.apply_after {
             return Err(Error::UpgradeNotReady);
         }
+        let bundle_key = symbol_short!("pol_bdl");
+        Self::require_mandatory_reviewers_approved(&env, &bundle_key)?;
         storage::set_risk_threshold(&env, pending.bundle.risk_threshold);
         storage::set_cooldown_secs(&env, pending.bundle.cooldown_secs);
         storage::clear_pending_policy_bundle(&env);
+        storage::clear_review_approvals(&env, &bundle_key);
         events::policy_bundle_applied(
             &env,
             pending.bundle.risk_threshold,
             pending.bundle.cooldown_secs,
         );
+        Ok(())
+    }
+
+    /// Cancels a pending policy bundle proposal before or after its time-lock
+    /// elapses, clearing the queued proposal from storage and emitting a
+    /// `policy_bundle_vetoed` audit event.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has not been initialized.
+    /// - [`Error::NoPendingUpgrade`] if no policy bundle proposal is pending.
+    pub fn veto_policy_bundle(
+        env: Env,
+        admin_signers: Vec<Address>,
+        bundle_id: Symbol,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
+        if !storage::has_pending_policy_bundle(&env) {
+            return Err(Error::NoPendingUpgrade);
+        }
+        storage::clear_pending_policy_bundle(&env);
+        storage::clear_review_approvals(&env, &symbol_short!("pol_bdl"));
+        events::policy_bundle_vetoed(&env, &bundle_id, env.ledger().timestamp());
         Ok(())
     }
 
@@ -6948,6 +6997,9 @@ impl ScoreGateScoreContract {
             return Err(Error::NotInitialized);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
+        if !storage::is_epoch_open(&env) {
+            return Err(Error::EpochAlreadyClosed);
+        }
         let epoch_id = storage::get_current_epoch(&env);
         storage::set_epoch_open(&env, false);
         events::epoch_closed(&env, epoch_id);
@@ -6961,6 +7013,9 @@ impl ScoreGateScoreContract {
 
     /// Returns `true` when the current epoch is open for submissions.
     pub fn is_epoch_open(env: Env) -> bool {
+        if !storage::has_admin(&env) {
+            return false;
+        }
         storage::is_epoch_open(&env)
     }
 
@@ -7191,6 +7246,7 @@ impl ScoreGateScoreContract {
             proposed_by: admin.clone(),
         };
         storage::set_pending_upgrade(&env, &proposal);
+        storage::clear_review_approvals(&env, &symbol_short!("upgrade"));
         // The propose_upgrade audit payload is the new WASM hash (32 bytes) rather
         // than a discriminant byte so the committed hash is unconditionally captured.
         // append_governance_action emits the typed gov_action event alongside it.
@@ -7242,10 +7298,14 @@ impl ScoreGateScoreContract {
             return Err(Error::UpgradeNotReady);
         }
 
+        let target = symbol_short!("upgrade");
+        Self::require_mandatory_reviewers_approved(&env, &target)?;
+
         // The actual Soroban upgrade primitive — replaces this contract's WASM.
         env.deployer().update_current_contract_wasm(proposal.new_wasm_hash.clone());
 
         storage::clear_pending_upgrade(&env);
+        storage::clear_review_approvals(&env, &target);
         events::upgrade_executed(&env, &proposal.new_wasm_hash);
         Ok(())
     }
@@ -7273,6 +7333,7 @@ impl ScoreGateScoreContract {
             return Err(Error::NoPendingUpgrade);
         }
         storage::clear_pending_upgrade(&env);
+        storage::clear_review_approvals(&env, &symbol_short!("upgrade"));
 
         events::upgrade_vetoed(&env, &admin);
         Ok(())
@@ -7338,6 +7399,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -7406,6 +7468,7 @@ impl ScoreGateScoreContract {
         let record = ParameterProposalRecord { proposal, status: ParameterProposalStatus::Pending };
         storage::set_parameter_proposal_record(&env, proposal_id, &record);
         storage::push_pending_parameter_proposal(&env, proposal_id);
+        storage::clear_review_approvals(&env, &param_key);
 
         let executable_after = now.saturating_add(time_lock_secs);
         events::parameter_change_proposed(&env, proposal_id, &param_key, executable_after);
@@ -7454,12 +7517,15 @@ impl ScoreGateScoreContract {
             return Err(Error::ParameterProposalNotReady);
         }
 
+        Self::require_mandatory_reviewers_approved(&env, &p.param_key)?;
+
         parameter_governance::apply_parameter_change(&env, &p.param_key, &p.new_value)?;
         storage::mark_parameter_proposal_status(
             &env,
             proposal_id,
             ParameterProposalStatus::Executed,
         );
+        storage::clear_review_approvals(&env, &p.param_key);
         events::parameter_change_executed(&env, proposal_id, &p.param_key);
         Ok(())
     }
@@ -7505,6 +7571,7 @@ impl ScoreGateScoreContract {
             service_signers.get(0).unwrap()
         };
         storage::mark_parameter_proposal_status(&env, proposal_id, ParameterProposalStatus::Vetoed);
+        storage::clear_review_approvals(&env, &p.param_key);
         events::parameter_change_vetoed(&env, proposal_id, &vetoer);
         Ok(())
     }
@@ -7950,6 +8017,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -8747,6 +8815,7 @@ impl ScoreGateScoreContract {
                 apply_after,
             },
         );
+        storage::clear_review_approvals(&env, &key);
         events::param_change_proposed(&env, &key, apply_after);
         Ok(())
     }
@@ -8958,6 +9027,20 @@ impl ScoreGateScoreContract {
             return Err(Error::InvalidCooldown);
         }
         Self::require_admin_auth(&env, &admin_signers)?;
+        let key = symbol_short!("cooldown");
+        let now = env.ledger().timestamp();
+        let apply_after = now.saturating_add(storage::get_param_change_delay(&env));
+        storage::set_pending_param_change(
+            &env,
+            &key,
+            &ParamChangeProposal {
+                new_value: ParamValue::U64(secs),
+                proposed_at: now,
+                apply_after,
+            },
+        );
+        storage::clear_review_approvals(&env, &key);
+        events::param_change_proposed(&env, &key, apply_after);
         storage::set_cooldown_secs(&env, secs);
         events::cooldown_updated(&env, secs);
         Ok(())
@@ -13247,30 +13330,6 @@ impl ScoreGateScoreContract {
 
     // ── Verkle commitment internals ──────────────────────────────────────────
 
-    /// Persist a finalized `RiskScore` and update all derived state:
-    /// score storage, history ring, pair/wallet registration, counters,
-    /// and the Verkle commitment.  Called by `commit_pending_score` and the
-    /// internal single-submission path once all validation gates pass.
-    fn finalize_score_state(
-        env: &Env,
-        wallet: &Address,
-        asset_pair: &Symbol,
-        risk_score: &RiskScore,
-    ) -> Result<(), Error> {
-        let previous_score = storage::peek_score(env, wallet, asset_pair).map(|s| s.score);
-        storage::set_score(env, wallet, asset_pair, risk_score);
-        storage::push_score_history(env, wallet, asset_pair, risk_score);
-        storage::register_pair_for_wallet(env, wallet, asset_pair);
-        storage::increment_score_count(env, wallet, asset_pair);
-        storage::increment_pair_score_count(env, asset_pair);
-        if previous_score.is_none() {
-            storage::increment_total_wallets_scored(env);
-        }
-        Self::update_verkle_commitment(env, wallet, asset_pair, risk_score);
-        events::score_submitted(env, wallet, asset_pair, risk_score);
-        Ok(())
-    }
-
     /// Incrementally update the Verkle commitment when a score is written.
     ///
     /// Algorithm:
@@ -13474,6 +13533,62 @@ impl ScoreGateScoreContract {
 
     pub fn get_mandatory_reviewers(env: Env) -> Vec<Address> {
         storage::get_mandatory_reviewers(&env)
+    }
+
+    /// Record a mandatory technical reviewer's approval for a governance or
+    /// proposal target (`"upgrade"`, `"pol_bdl"`, or a parameter key such as
+    /// `"risk_thr"`, `"hist_dep"`, `"upg_dly"`, `"cooldown"`, `"stale_w"`).
+    ///
+    /// When [`get_mandatory_reviewers`](Self::get_mandatory_reviewers) is
+    /// non-empty, every configured mandatory reviewer must approve the target
+    /// before the corresponding proposal can be executed or applied.
+    pub fn approve_proposal_review(
+        env: Env,
+        reviewer: Address,
+        target: Symbol,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        let mandatory = storage::get_mandatory_reviewers(&env);
+        if !mandatory.contains(&reviewer) {
+            return Err(Error::ReviewerNotFound);
+        }
+        reviewer.require_auth();
+
+        let mut approvals = storage::get_review_approvals(&env, &target);
+        if !approvals.contains(&reviewer) {
+            approvals.push_back(reviewer.clone());
+            storage::set_review_approvals(&env, &target, &approvals);
+        }
+        events::proposal_review_approved(
+            &env,
+            &target,
+            &reviewer,
+            approvals.len(),
+            mandatory.len(),
+        );
+        Ok(())
+    }
+
+    /// Returns the list of mandatory reviewers that have approved `target`.
+    pub fn get_proposal_review_approvals(env: Env, target: Symbol) -> Vec<Address> {
+        storage::get_review_approvals(&env, &target)
+    }
+
+    fn require_mandatory_reviewers_approved(env: &Env, target: &Symbol) -> Result<(), Error> {
+        let mandatory = storage::get_mandatory_reviewers(env);
+        if mandatory.is_empty() {
+            return Ok(());
+        }
+        let approvals = storage::get_review_approvals(env, target);
+        for i in 0..mandatory.len() {
+            let reviewer = mandatory.get(i).unwrap();
+            if !approvals.contains(&reviewer) {
+                return Err(Error::MissingMandatoryReviewerApprovals);
+            }
+        }
+        Ok(())
     }
 
     // ── #631: Post-incident state checksum & reconciliation ───────────────────

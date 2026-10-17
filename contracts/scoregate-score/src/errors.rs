@@ -109,6 +109,7 @@ impl Error {
     pub const InvalidParameterTimeLock: Error = Error::InvalidUpgradeDelay;
 
     pub const EpochClosed: Error = Error::ContractPaused;
+    pub const EpochAlreadyClosed: Error = Error::ContractPaused;
     pub const InsufficientPairData: Error = Error::InsufficientConsensus;
     pub const GateCallerListFull: Error = Error::ServiceSetFull;
     pub const GateCallerNotInList: Error = Error::ScoreNotFound;
@@ -138,6 +139,8 @@ impl Error {
     pub const ReviewerAlreadyExists: Error = Error::SignerAlreadyInSet;
     /// Returned when a reviewer to be removed is not in the set.
     pub const ReviewerNotFound: Error = Error::SignerNotInSet;
+    /// Returned when a governance proposal is executed without all mandatory reviewer approvals.
+    pub const MissingMandatoryReviewerApprovals: Error = Error::InsufficientSigners;
 
     // ── Administrative capability partitioning (issue #695) ────────────────
     /// Returned by `set_policy_approval` when called with
