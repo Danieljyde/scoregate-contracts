@@ -901,6 +901,10 @@ pub fn param_change_proposed(env: &Env, key: &Symbol, apply_after: u64) {
     env.events().publish((symbol_short!("pc_prop"),), (key.clone(), apply_after));
 }
 
+pub fn param_change_applied(env: &Env, key: &Symbol, new_value: crate::types::ParamValue) {
+    env.events().publish((symbol_short!("pc_appl"),), (key.clone(), new_value));
+}
+
 /// Emitted when a risk-threshold + cooldown policy bundle is proposed via
 /// `propose_policy_bundle`.
 /// Topic: ("pbdl_prop",)  Data: (risk_threshold, cooldown_secs, apply_after)
@@ -919,6 +923,26 @@ pub fn policy_bundle_proposed(
 /// Topic: ("pbdl_appl",)  Data: (risk_threshold, cooldown_secs)
 pub fn policy_bundle_applied(env: &Env, risk_threshold: u32, cooldown_secs: u64) {
     env.events().publish((symbol_short!("pbdl_appl"),), (risk_threshold, cooldown_secs));
+}
+
+/// Emitted when a pending policy bundle is vetoed via `veto_policy_bundle`.
+/// Topic: ("pbdl_veto",)  Data: (bundle_id, timestamp)
+pub fn policy_bundle_vetoed(env: &Env, bundle_id: &Symbol, timestamp: u64) {
+    env.events().publish((symbol_short!("pbdl_veto"),), (bundle_id.clone(), timestamp));
+}
+
+/// Emitted when a mandatory reviewer approves a pending proposal via
+/// `approve_proposal_review`.
+/// Topic: ("rev_appr", target)  Data: (reviewer, count, required)
+pub fn proposal_review_approved(
+    env: &Env,
+    target: &Symbol,
+    reviewer: &Address,
+    count: u32,
+    required: u32,
+) {
+    env.events()
+        .publish((symbol_short!("rev_appr"), target.clone()), (reviewer.clone(), count, required));
 }
 
 #[allow(clippy::too_many_arguments)]

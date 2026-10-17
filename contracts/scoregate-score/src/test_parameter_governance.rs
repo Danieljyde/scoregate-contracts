@@ -7,8 +7,8 @@ use soroban_sdk::{
 
 use crate::{
     constants::{
-        DEFAULT_COOLDOWN_SECS, DEFAULT_UPGRADE_DELAY_SECS, MAX_PENDING_PARAMETER_PROPOSALS,
-        MIN_COOLDOWN_SECS,
+        DEFAULT_COOLDOWN_SECS, DEFAULT_UPGRADE_DELAY_SECS, MAX_PARAMETER_PROPOSAL_HISTORY,
+        MAX_PENDING_PARAMETER_PROPOSALS, MIN_COOLDOWN_SECS,
     },
     parameter_governance::param_key_cooldown,
     storage,
@@ -421,4 +421,35 @@ fn test_execute_nonexistent_proposal_returns_not_found() {
     let bogus_id: u64 = 9_999;
     let result = client.try_execute_parameter_change(&admin_signers(&env, &admin), &bogus_id);
     assert_eq!(result, Err(Ok(Error::ParameterProposalNotFound)));
+}
+
+#[test]
+fn test_parameter_proposal_index_bounded_by_max_history_cap() {
+    let (env, client, admin, service) = setup();
+    env.budget().reset_unlimited();
+    let value = encode_u64(&env, MIN_COOLDOWN_SECS);
+
+    // Propose and immediately veto 105 proposals to ensure pending limit (10) isn't hit
+    for _ in 0..105 {
+        let pid = client.propose_parameter_change(
+            &admin_signers(&env, &admin),
+            &param_key_cooldown(),
+            &value,
+        );
+        client.veto_parameter_change(&service_signers(&env, &service), &pid);
+    }
+
+    let index = client.get_parameter_proposal_index();
+    assert_eq!(index.len(), MAX_PARAMETER_PROPOSAL_HISTORY);
+    // Proposal IDs start at 1, so after 105 proposals (1..=105), the first 5 (1..=5) should be pruned
+    assert_eq!(index.get(0).unwrap(), 6);
+    assert_eq!(index.get(99).unwrap(), 105);
+
+    // Pruned proposal #1 should no longer be found in storage
+    let pruned = client.try_get_parameter_proposal(&1u64);
+    assert_eq!(pruned, Err(Ok(Error::ParameterProposalNotFound)));
+
+    // Retained proposal #6 should still be accessible
+    let retained = client.get_parameter_proposal(&6u64);
+    assert_eq!(retained.status, ParameterProposalStatus::Vetoed);
 }

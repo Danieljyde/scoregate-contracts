@@ -46,7 +46,7 @@ fn setup<'a>(contract_reserve: i128, challenger_funds: i128) -> Fixture<'a> {
     let issuer = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(issuer);
     let token = sac.address();
-    client.set_fee_token(&token);
+    client.set_fee_token(&Vec::new(&env), &token);
 
     let minter = StellarAssetClient::new(&env, &token);
     if contract_reserve > 0 {

@@ -133,7 +133,7 @@ const DOMAIN_NONMEMBER: u8 = 0x07;
 /// Derive the KZG evaluation point `z` for a `(wallet_bytes, pair_bytes)` key.
 ///
 /// ```text
-/// preimage = DOMAIN_EVAL_POINT || wallet_bytes[..56] || pair_bytes[..9]
+/// preimage = DOMAIN_EVAL_POINT || wallet_bytes[..56] || pair_bytes[..9] || contract_bytes[..56]
 /// z        = SHA-256(preimage) with top-3 bits zeroed (field reduction)
 /// ```
 pub fn derive_evaluation_point(
@@ -141,10 +141,14 @@ pub fn derive_evaluation_point(
     wallet_bytes: &[u8; 56],
     pair_bytes: &[u8; 9],
 ) -> [u8; 32] {
-    let mut buf = [0u8; 66]; // 1 + 56 + 9
+    let mut contract_buf = [0u8; 56];
+    env.current_contract_address().to_string().copy_into_slice(&mut contract_buf);
+
+    let mut buf = [0u8; 122]; // 1 + 56 + 9 + 56
     buf[0] = DOMAIN_EVAL_POINT;
     buf[1..57].copy_from_slice(wallet_bytes);
     buf[57..66].copy_from_slice(pair_bytes);
+    buf[66..122].copy_from_slice(&contract_buf);
     let hash = env.crypto().sha256(&Bytes::from_array(env, &buf));
     let mut z = hash.to_bytes().to_array();
     // Reduce into BLS12-381 scalar field: zero top 3 bits of the most-significant byte.
@@ -301,4 +305,24 @@ pub fn commitment_to_bytes48(env: &Env, commitment: &[u8; 32]) -> BytesN<48> {
     // bytes 2..15 remain zero
     buf[16..48].copy_from_slice(commitment);
     BytesN::from_array(env, &buf)
+}
+
+/// Safely copies a string into a 56-byte buffer with zero-padding,
+/// bounded up to min(s.len(), 56) bytes without panicking regardless of string length.
+pub fn copy_str_to_56_bytes(s: &soroban_sdk::String) -> [u8; 56] {
+    let mut buf = [0u8; 56];
+    let len = s.len() as usize;
+    let mut temp = [0u8; 256];
+    if len <= 256 {
+        s.copy_into_slice(&mut temp[..len]);
+        let copy_len = len.min(56);
+        buf[..copy_len].copy_from_slice(&temp[..copy_len]);
+    }
+    buf
+}
+
+/// Bounded slice copy of an Address to a 56-byte buffer, preventing host traps
+/// on variable-length addresses (such as 69-character muxed accounts or short mock addresses).
+pub fn copy_address_to_56_bytes(address: &soroban_sdk::Address) -> [u8; 56] {
+    copy_str_to_56_bytes(&address.to_string())
 }

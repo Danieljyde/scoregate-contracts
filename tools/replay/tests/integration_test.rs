@@ -259,7 +259,7 @@ mod tests {
         let (client, _admin, _service) = init_contract(&env);
 
         let pair = Symbol::new(&env, "XLM_USDC");
-        client.set_pair_paused(&pair, &true);
+        client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
         let wallet = Address::generate(&env);
 
@@ -283,7 +283,7 @@ mod tests {
             scoregate_score::Error::ContractPaused as u32
         );
 
-        client.set_pair_paused(&pair, &false);
+        client.set_pair_paused(&Vec::new(&env), &pair, &false);
     }
 
     #[test]

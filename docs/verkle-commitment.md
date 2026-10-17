@@ -53,10 +53,11 @@ This is a valid reduction because SHA-256 output is computationally indistinguis
 Each `(wallet, asset_pair)` key maps to a unique **evaluation point** `z`:
 
 ```rust
-preimage = 0x04 || wallet_strkey[56] || pair_ascii[9]
+preimage = 0x04 || wallet_strkey[56] || pair_ascii[9] || contract_strkey[56]
 z        = SHA-256(preimage) with top-3 bits zeroed
+```
 
-Domain separator `0x04` prevents collisions with other hash uses. The wallet strkey is the 56-character Stellar base-32 encoding; the pair is zero-padded ASCII to 9 bytes.
+Domain separator `0x04` prevents collisions with other hash uses. The wallet strkey is the 56-character Stellar base-32 encoding; the pair is zero-padded ASCII to 9 bytes; the contract address is the 56-character Stellar base-32 encoding of the deployed contract instance (`env.current_contract_address()`).
 
 ### Value Element
 

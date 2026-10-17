@@ -10,7 +10,7 @@ use crate::constants::{
 use crate::errors::Error;
 use crate::types::{
     AdaptiveRateLimit, AggregateRiskScore, AlertAckRecord, AlertType, DataKey, DataKeyB, DataKeyC,
-    DataKeyD, DecayCurve, DeletionApprovalPolicy, EmbargoExpiry, FlashProtectionMode, GateDataKey,
+    DataKeyD, DataKeyE, DecayCurve, DeletionApprovalPolicy, EmbargoExpiry, FlashProtectionMode, GateDataKey,
     HllSketch, InterpolationMethod, JumpStats, ModelVersionStats, ModelVersionStatus,
     PairVolatilityState, ParamChangeProposal, ParameterProposalRecord, ParameterProposalStatus,
     PendingScoreEntry, Policy, PolicyApproval, PolicyBundleProposal, RateLimitOverrideEntry,
@@ -27,6 +27,7 @@ pub const MAX_MANDATORY_REVIEWERS: u32 = 10;
 enum ArchitectureDataKey {
     ArchOwner,
     MandatoryReviewers,
+    PendingArchOwner,
 }
 
 // ── Admin / Service ─────────────────────────────────────────────────────────
@@ -242,8 +243,7 @@ fn set_score_entry_index_bucket(env: &Env, bucket: u32, index: &Vec<(Address, Sy
 
 fn score_entry_index_bucket(env: &Env, wallet: &Address, asset_pair: &Symbol) -> u32 {
     let mut hash = 0u32;
-    let mut wallet_bytes = [0u8; 56];
-    wallet.to_string().copy_into_slice(&mut wallet_bytes);
+    let wallet_bytes = crate::verkle::copy_address_to_56_bytes(wallet);
     for byte in wallet_bytes {
         hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
     }
@@ -332,9 +332,9 @@ pub fn get_expiring_entries(env: &Env, max_entries: u32) -> Vec<(Address, Symbol
             Some(elapsed) if elapsed >= SCORE_TTL_THRESHOLD => {
                 result.push_back((wallet, asset_pair));
             }
-            // Front-to-back the queue is sorted by descending elapsed time,
-            // so the first not-yet-due entry means nothing after it is due
-            // either — safe to stop here.
+            // Out-of-order TTL renewals may leave unexpired entries ahead of
+            // expiring ones. Continue traversal so genuinely expiring entries
+            // later in the index are not missed (#181).
             _ => continue,
         }
     }
@@ -916,6 +916,36 @@ pub fn count_pending_parameter_proposals(env: &Env) -> u32 {
     get_pending_parameter_proposal_ids(env).len()
 }
 
+pub fn get_parameter_proposal_index(env: &Env) -> Vec<u64> {
+    env.storage()
+        .instance()
+        .get(&DataKeyE::ParameterProposalIndex)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_parameter_proposal_index(env: &Env, ids: &Vec<u64>) {
+    env.storage().instance().set(&DataKeyE::ParameterProposalIndex, ids);
+}
+
+/// Appends a proposal ID to `ParameterProposalIndex`, enforcing the `MAX_PARAMETER_PROPOSAL_HISTORY` cap.
+/// If appending exceeds the cap, the oldest proposal is safely pruned from the index and from storage.
+pub fn append_parameter_proposal_index(env: &Env, proposal_id: u64) {
+    let mut index = get_parameter_proposal_index(env);
+    for i in 0..index.len() {
+        if index.get(i).unwrap() == proposal_id {
+            return;
+        }
+    }
+    while index.len() >= crate::constants::MAX_PARAMETER_PROPOSAL_HISTORY {
+        let oldest_id = index.get(0).unwrap();
+        index.remove(0);
+        env.storage().instance().remove(&DataKeyB::ParameterProposal(oldest_id));
+        env.storage().persistent().remove(&DataKeyB::ParameterProposal(oldest_id));
+    }
+    index.push_back(proposal_id);
+    set_parameter_proposal_index(env, &index);
+}
+
 pub fn mark_parameter_proposal_status(
     env: &Env,
     proposal_id: u64,
@@ -925,6 +955,7 @@ pub fn mark_parameter_proposal_status(
     record.status = status;
     set_parameter_proposal_record(env, proposal_id, &record);
     remove_pending_parameter_proposal(env, proposal_id);
+    append_parameter_proposal_index(env, proposal_id);
     Some(record)
 }
 
@@ -952,6 +983,7 @@ pub fn prune_expired_parameter_proposals(env: &Env) {
 /// Deletes all expired proposals from storage that have been expired for at least 48 hours.
 /// Returns (count_deleted, oldest_proposal_kept_timestamp).
 pub fn cleanup_expired_parameter_proposals(env: &Env) -> (u32, u64) {
+    prune_expired_parameter_proposals(env);
     let now = env.ledger().timestamp();
     let ttl_buffer_secs = 48 * 3600;
     let mut count = 0;
@@ -971,6 +1003,7 @@ pub fn cleanup_expired_parameter_proposals(env: &Env) -> (u32, u64) {
                     .proposed_at
                     .saturating_add(record.proposal.time_lock_secs.saturating_mul(2));
                 if now > expiry.saturating_add(ttl_buffer_secs) {
+                    env.storage().instance().remove(&DataKeyB::ParameterProposal(id));
                     env.storage().persistent().remove(&DataKeyB::ParameterProposal(id));
                     count += 1;
                     continue;
@@ -1321,10 +1354,8 @@ fn hll_new_sketch(env: &Env, precision: u32) -> HllSketch {
 }
 
 fn hll_hash_wallet(env: &Env, wallet: &Address) -> [u8; 32] {
-    let mut wallet_buf = [0u8; 56];
-    let wallet_str = wallet.to_string();
-    wallet_str.copy_into_slice(&mut wallet_buf);
-    let len = wallet_str.len().min(56) as usize;
+    let wallet_buf = crate::verkle::copy_address_to_56_bytes(wallet);
+    let len = (wallet.to_string().len() as usize).min(56);
     let bytes = soroban_sdk::Bytes::from_slice(env, &wallet_buf[..len]);
     env.crypto().sha256(&bytes).to_bytes().to_array()
 }
@@ -2897,6 +2928,9 @@ pub fn set_oracle_staleness_threshold(env: &Env, threshold_secs: u64) {
 // ── Epoch sealing (issue #301) ────────────────────────────────────────────────
 
 pub fn is_epoch_open(env: &Env) -> bool {
+    if !has_admin(env) {
+        return false;
+    }
     env.storage().instance().get(&DataKeyD::EpochOpen).unwrap_or(true)
 }
 
@@ -3214,6 +3248,22 @@ pub fn get_arch_owner(env: &Env) -> Option<Address> {
     env.storage().instance().get(&ArchitectureDataKey::ArchOwner)
 }
 
+pub fn has_pending_arch_owner(env: &Env) -> bool {
+    env.storage().instance().has(&ArchitectureDataKey::PendingArchOwner)
+}
+
+pub fn set_pending_arch_owner(env: &Env, owner: &Address) {
+    env.storage().instance().set(&ArchitectureDataKey::PendingArchOwner, owner);
+}
+
+pub fn get_pending_arch_owner(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&ArchitectureDataKey::PendingArchOwner)
+}
+
+pub fn clear_pending_arch_owner(env: &Env) {
+    env.storage().instance().remove(&ArchitectureDataKey::PendingArchOwner);
+}
+
 pub fn set_mandatory_reviewers(env: &Env, reviewers: &Vec<Address>) {
     env.storage().instance().set(&ArchitectureDataKey::MandatoryReviewers, reviewers);
 }
@@ -3223,6 +3273,21 @@ pub fn get_mandatory_reviewers(env: &Env) -> Vec<Address> {
         .instance()
         .get(&ArchitectureDataKey::MandatoryReviewers)
         .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn get_review_approvals(env: &Env, target: &Symbol) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&ArchitectureDataKey::ReviewApprovals(target.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_review_approvals(env: &Env, target: &Symbol, approvals: &Vec<Address>) {
+    env.storage().instance().set(&ArchitectureDataKey::ReviewApprovals(target.clone()), approvals);
+}
+
+pub fn clear_review_approvals(env: &Env, target: &Symbol) {
+    env.storage().instance().remove(&ArchitectureDataKey::ReviewApprovals(target.clone()));
 }
 
 pub fn set_submission_provenance(
@@ -3283,7 +3348,6 @@ pub fn set_signer_state_record(env: &Env, record: &SignerStateRecord) {
 pub fn get_signer_state_record(env: &Env, signer: &Address) -> Option<SignerStateRecord> {
     env.storage().persistent().get(&DataKeyD::SignerState(signer.clone()))
 }
-
 
 // ── #631: Emergency freeze / thaw ──────────────────────────────────────────
 

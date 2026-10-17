@@ -661,3 +661,108 @@ fn test_batch_override_rate_limit_oversized_batch_rejected() {
     let result = client.try_batch_override_rate_limit(&Vec::new(&env), &entries);
     assert_eq!(result, Err(Ok(Error::BatchTooLarge)));
 }
+
+#[test]
+fn test_same_ledger_burst_successive_invocations() {
+    let (env, client, _admin) = setup();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    // Set burst capacity to 3
+    client.set_burst_capacity(&3);
+    assert_eq!(client.get_burst_capacity(), 3);
+
+    // 1st submission in same ledger (elapsed = 0) -> accepted
+    let res1 = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &50,
+        &false,
+        &false,
+        &START_TS,
+        &90,
+        &1,
+        &None,
+    );
+    assert!(res1.is_ok());
+
+    // 2nd submission in same ledger (elapsed = 0) -> accepted
+    let res2 = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &55,
+        &false,
+        &false,
+        &START_TS,
+        &90,
+        &1,
+        &None,
+    );
+    assert!(res2.is_ok());
+
+    // 3rd submission in same ledger (elapsed = 0) -> accepted
+    let res3 = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &60,
+        &false,
+        &false,
+        &START_TS,
+        &90,
+        &1,
+        &None,
+    );
+    assert!(res3.is_ok());
+
+    // 4th submission in same ledger (burst capacity 3 exhausted) -> rejected with RateLimitExceeded
+    let res4 = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &65,
+        &false,
+        &false,
+        &START_TS,
+        &90,
+        &1,
+        &None,
+    );
+    assert_eq!(res4, Err(Ok(Error::RateLimitExceeded)));
+}
+
+#[test]
+fn test_same_ledger_batch_burst_successive_invocations() {
+    let (env, client, _admin) = setup();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    // Set burst capacity to 3
+    client.set_burst_capacity(&3);
+    assert_eq!(client.get_burst_capacity(), 3);
+
+    let mut batch: Vec<ScoreSubmission> = Vec::new(&env);
+    for i in 0..4 {
+        batch.push_back(ScoreSubmission {
+            wallet: wallet.clone(),
+            asset_pair: pair.clone(),
+            score: 50 + i * 2,
+            benford_flag: false,
+            ml_flag: false,
+            timestamp: START_TS,
+            confidence: 50,
+            model_version: 1,
+        });
+    }
+
+    let result = client.submit_scores_batch(&Vec::new(&env), &batch);
+    assert_eq!(result.accepted_count, 3);
+    assert_eq!(result.rejected_count, 1);
+    assert!(result.results.get(0).unwrap().accepted);
+    assert!(result.results.get(1).unwrap().accepted);
+    assert!(result.results.get(2).unwrap().accepted);
+    assert!(!result.results.get(3).unwrap().accepted);
+    assert_eq!(result.results.get(3).unwrap().rejection_code, Error::RateLimitExceeded as u32);
+}

@@ -332,34 +332,74 @@ stay unaffected; dApps querying ScoreGate can continue operating during the free
 
 ## Policy Bundles
 
-`propose_policy_bundle` / `apply_policy_bundle` group the risk threshold and
-submission cooldown into a single named change so operators review and roll
-out both together, instead of as two independently-timelocked changes that
-could land at different times (e.g. a lowered risk threshold taking effect
-before its paired cooldown increase, temporarily over-tightening the gate).
+`propose_policy_bundle`, `apply_policy_bundle`, and `veto_policy_bundle` group
+the risk threshold and submission cooldown into a single named change so
+operators review and roll out both together, instead of as two
+independently-timelocked changes that could land at different times (e.g. a
+lowered risk threshold taking effect before its paired cooldown increase,
+temporarily over-tightening the gate).
 
-This uses the same simple time-lock as `set_risk_threshold` /
-`set_history_max_depth` (no veto window, single time-lock, `apply_after` gate
-callable by anyone) rather than the richer `propose_parameter_change` flow
-documented above — it is a separate, lighter-weight mechanism, not an
-extension of the `Supported Parameters` table.
+This uses the same time-lock delay as `set_risk_threshold` /
+`set_history_max_depth` (`apply_after` gate callable by anyone after the delay
+elapses, with admin cancellation via `veto_policy_bundle(admin_signers, bundle_id)`
+during the time-lock window) rather than the `propose_parameter_change` flow
+documented above.
 
 Both fields are validated before anything is stored: an invalid
 `risk_threshold` (>100) or `cooldown_secs` (outside
 `[MIN_COOLDOWN_SECS, MAX_COOLDOWN_SECS]`) rejects the whole proposal, so
 there is no partial proposal. `apply_policy_bundle` writes both fields in the
 same call, so no caller can observe one field updated while the other is
-still pending.
+still pending. If an erroneous bundle is proposed, the admin multi-sig can
+revoke it prior to execution via `veto_policy_bundle`.
 
 | Topic | When |
 |-------|------|
 | `pbdl_prop` | Bundle proposed `(risk_threshold, cooldown_secs, apply_after)` |
 | `pbdl_appl` | Bundle applied `(risk_threshold, cooldown_secs)` |
+| `pbdl_veto` | Bundle vetoed `(bundle_id, timestamp)` |
+
+## Time-Locked Parameter Setters (`apply_param_change`)
+
+Direct parameter setters (`set_risk_threshold`, `set_history_max_depth`,
+`set_upgrade_delay`, `set_cooldown`, and `set_staleness_window`) record a
+time-locked `ParamChangeProposal` keyed by parameter symbol (`risk_thr`,
+`hist_dep`, `upg_dly`, `cooldown`, `stale_w`) and emit `pc_prop`. Once
+`apply_after` has elapsed, calling `apply_param_change(key)` applies the new
+parameter value, clears the pending entry, and emits `pc_appl`
+(`param_change_applied`) carrying `(key, new_value)`.
+
+## Mandatory Technical Reviewers
+
+The architecture owner (or contract admin) can configure an allowlist of up to
+`MAX_MANDATORY_REVIEWERS` (10) technical reviewer addresses via
+`set_mandatory_reviewers(reviewers)`.
+
+When `get_mandatory_reviewers()` is non-empty, every configured mandatory
+reviewer must record on-chain sign-off via
+`approve_proposal_review(reviewer, target)` before any of the following
+lifecycle changes can be executed:
+
+- `execute_upgrade` (`target = symbol_short!("upgrade")`)
+- `apply_policy_bundle` (`target = symbol_short!("pol_bdl")`)
+- `apply_param_change(key)` (`target = key`)
+- `execute_parameter_change(admin_signers, proposal_id)` (`target = param_key`)
+
+Attempting to execute or apply an unapproved or partially approved proposal
+when mandatory reviewers are configured fails with
+`Error::MissingMandatoryReviewerApprovals`. Approvals are automatically cleared
+when a proposal is created, executed, applied, or vetoed.
+
+| Topic | When |
+|-------|------|
+| `rev_appr` | Reviewer approved target `(target, reviewer, approval_count, required_count)` |
 
 ## Related
 
 - WASM upgrade governance: `propose_upgrade` / `execute_upgrade` / `veto_upgrade`
 - Upgrade delay configuration: `set_upgrade_delay` / `get_upgrade_delay`
+- Architecture & reviewer governance: [`architecture.md`](./architecture.md)
 - Threat model: [`SECURITY.md`](../SECURITY.md#upgrade-governance--threat-model)
 - Canonical export: [`configuration-export.md`](./configuration-export.md)
 - Safe defaults: [`configuration-safe-defaults.md`](./configuration-safe-defaults.md)
+
