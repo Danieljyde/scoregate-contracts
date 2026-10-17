@@ -267,3 +267,56 @@ fn inv18_fails_when_depth_exceeds_max() {
         invariants::invariant_check(&env);
     });
 }
+
+// ── Invariant #9: ScoreCount > 0 iff Score entry exists ─────────────────────
+
+#[test]
+fn inv9_passes_after_normal_submit() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    env.as_contract(&id, || {
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
+        storage::track_score_entry(&env, &wallet, &pair);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::increment_score_count(&env, &wallet, &pair);
+        assert!(invariants::score_count_is_consistent(&env));
+        invariants::invariant_check(&env);
+    });
+}
+
+#[test]
+#[should_panic(expected = "INVARIANT #9 VIOLATED")]
+fn inv9_fails_when_score_entry_has_zero_score_count() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    env.as_contract(&id, || {
+        // Live Score exists and is tracked in ScoreEntryIndex, but ScoreCount was never incremented
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
+        storage::track_score_entry(&env, &wallet, &pair);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        assert!(!invariants::score_count_is_consistent(&env));
+        invariants::invariant_check(&env);
+    });
+}
+
+#[test]
+#[should_panic(expected = "INVARIANT #9 VIOLATED")]
+fn inv9_fails_when_score_count_is_desynchronized_to_zero() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    env.as_contract(&id, || {
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
+        storage::track_score_entry(&env, &wallet, &pair);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::increment_score_count(&env, &wallet, &pair);
+        // Explicitly clear ScoreCount key to simulate desynchronization
+        env.storage().persistent().remove(&DataKey::ScoreCount(wallet.clone(), pair.clone()));
+        invariants::invariant_check(&env);
+    });
+}

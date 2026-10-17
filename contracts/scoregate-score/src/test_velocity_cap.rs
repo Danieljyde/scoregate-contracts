@@ -1,4 +1,4 @@
-﻿#![cfg(test)]
+#![cfg(test)]
 #![allow(unused_imports)]
 
 use soroban_sdk::{
@@ -354,4 +354,48 @@ fn test_batch_submission_velocity_cap() {
 
     assert_eq!(client.get_score(&wallet1, &asset_pair).score, 30);
     assert_eq!(client.get_score(&wallet2, &asset_pair).score, 20); // Unchanged
+}
+
+#[test]
+fn test_set_velocity_cap_zero_points_when_enabled_fails() {
+    let (env, client, admin, _service) = initialized();
+    let result =
+        client.try_set_score_velocity_cap(&Vec::from_array(&env, [admin.clone()]), &true, &0);
+    assert_eq!(result, Err(Ok(Error::InvalidArgument)));
+}
+
+#[test]
+fn test_set_velocity_cap_points_exceeds_100_fails() {
+    let (env, client, admin, _service) = initialized();
+    let result =
+        client.try_set_score_velocity_cap(&Vec::from_array(&env, [admin.clone()]), &true, &101);
+    assert_eq!(result, Err(Ok(Error::InvalidArgument)));
+
+    let result_disabled =
+        client.try_set_score_velocity_cap(&Vec::from_array(&env, [admin.clone()]), &false, &101);
+    assert_eq!(result_disabled, Err(Ok(Error::InvalidArgument)));
+}
+
+#[test]
+fn test_set_velocity_cap_boundary_values_accepted() {
+    let (env, client, admin, _service) = initialized();
+    let admin_signers = Vec::from_array(&env, [admin.clone()]);
+
+    // Lower bound: 1 point per hour
+    client.set_score_velocity_cap(&admin_signers, &true, &1);
+    let cap = client.get_score_velocity_cap();
+    assert!(cap.enabled);
+    assert_eq!(cap.points_per_hour, 1);
+
+    // Upper bound: 100 points per hour
+    client.set_score_velocity_cap(&admin_signers, &true, &100);
+    let cap = client.get_score_velocity_cap();
+    assert!(cap.enabled);
+    assert_eq!(cap.points_per_hour, 100);
+
+    // Disabled with 0 points per hour is permitted
+    client.set_score_velocity_cap(&admin_signers, &false, &0);
+    let cap = client.get_score_velocity_cap();
+    assert!(!cap.enabled);
+    assert_eq!(cap.points_per_hour, 0);
 }

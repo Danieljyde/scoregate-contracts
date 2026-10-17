@@ -48,6 +48,7 @@ pub fn invariant_check(env: &Env) {
     check_config_invariants(env);
     check_score_index_invariants(env);
     check_history_invariants(env);
+    check_score_count_invariants(env);
     check_embargo_invariants(env);
     check_pair_registry_invariants(env);
     check_admin_transfer_invariants(env);
@@ -143,6 +144,34 @@ fn check_score_index_invariants(env: &Env) {
             assert!(
                 !(wallet == wallet2 && pair == pair2),
                 "INVARIANT #8 VIOLATED: ScoreEntryIndex contains duplicate entry ({wallet:?}, {pair:?}) at positions {i} and {j}"
+            );
+        }
+    }
+}
+
+// ─── Score count invariants ───────────────────────────────────────────────────
+
+/// Rationale for invariant #9:
+/// `ScoreCount` tracks the number of score submissions for a `(wallet, asset_pair)`.
+/// Every live score entry in `ScoreEntryIndex` must have a positive score count (`ScoreCount > 0`).
+/// Desynchronization between `ScoreEntryIndex` and `ScoreCount` indicates a state corruption
+/// or failed cleanup during score operations.
+#[cfg(any(test, feature = "testutils"))]
+fn check_score_count_invariants(env: &Env) {
+    let index = storage::get_score_entry_index(env);
+    for i in 0..index.len() {
+        let (wallet, pair) = index.get(i).unwrap();
+        let count = storage::get_score_count(env, &wallet, &pair);
+        let has_score = storage::peek_score(env, &wallet, &pair).is_some();
+        if has_score {
+            assert!(
+                count > 0,
+                "INVARIANT #9 VIOLATED: ScoreCount for ({wallet:?}, {pair:?}) is 0 despite live Score entry in ScoreEntryIndex"
+            );
+        } else {
+            assert!(
+                count == 0,
+                "INVARIANT #9 VIOLATED: ScoreCount for ({wallet:?}, {pair:?}) is {count} despite no live Score entry"
             );
         }
     }
@@ -359,4 +388,20 @@ pub fn embargo_count_is_consistent(env: &Env) -> bool {
 pub fn decay_rate_is_valid(env: &Env) -> bool {
     let (num, den) = storage::get_decay_rate(env);
     den > 0 && num <= den
+}
+
+/// Returns `true` iff every score entry in `ScoreEntryIndex` has a consistent
+/// `ScoreCount` matching the presence of a live `Score` key.
+#[cfg(any(test, feature = "testutils"))]
+pub fn score_count_is_consistent(env: &Env) -> bool {
+    let index = storage::get_score_entry_index(env);
+    for i in 0..index.len() {
+        let (wallet, pair) = index.get(i).unwrap();
+        let count = storage::get_score_count(env, &wallet, &pair);
+        let has_score = storage::peek_score(env, &wallet, &pair).is_some();
+        if (has_score && count == 0) || (!has_score && count > 0) {
+            return false;
+        }
+    }
+    true
 }

@@ -6,7 +6,7 @@ use soroban_sdk::{
     Address, Env, Vec,
 };
 
-use crate::{ScoreGateScoreContract, ScoreGateScoreContractClient};
+use crate::{Error, ScoreGateScoreContract, ScoreGateScoreContractClient};
 
 fn setup<'a>() -> (Env, ScoreGateScoreContractClient<'a>, Address, Address) {
     let env = Env::default();
@@ -122,4 +122,46 @@ fn breach_count_resets_after_non_breach_submission() {
     );
 
     assert_eq!(client.get_breach_count(&wallet, &pair), 0);
+}
+
+// ── Multisig authorization for set_escalation_threshold ───────────────────────
+
+#[test]
+fn test_set_escalation_threshold_multisig_enforced() {
+    let (env, client, _admin, _service) = setup();
+    let s1 = Address::generate(&env);
+    let s2 = Address::generate(&env);
+    client.add_admin_signer(&Vec::new(&env), &s1);
+    client.add_admin_signer(&Vec::new(&env), &s2);
+    client.set_admin_threshold(&Vec::new(&env), &2);
+
+    // Single-key authorization fails when threshold = 2
+    let single_signer = Vec::from_array(&env, [s1.clone()]);
+    let err = client.try_set_escalation_threshold(&single_signer, &7);
+    assert_eq!(err, Err(Ok(Error::InsufficientAdminSigners)));
+
+    // Empty signers fails when threshold = 2
+    let empty_signers = Vec::new(&env);
+    let err_empty = client.try_set_escalation_threshold(&empty_signers, &7);
+    assert_eq!(err_empty, Err(Ok(Error::InsufficientAdminSigners)));
+
+    // Quorum of 2 signers succeeds
+    let signers = Vec::from_array(&env, [s1.clone(), s2.clone()]);
+    client.set_escalation_threshold(&signers, &7);
+    assert_eq!(client.get_escalation_threshold(), 7);
+}
+
+#[test]
+fn test_set_escalation_threshold_multisig_unauthorized_signer_fails() {
+    let (env, client, _admin, _service) = setup();
+    let s1 = Address::generate(&env);
+    let s2 = Address::generate(&env);
+    let rogue = Address::generate(&env);
+    client.add_admin_signer(&Vec::new(&env), &s1);
+    client.add_admin_signer(&Vec::new(&env), &s2);
+    client.set_admin_threshold(&Vec::new(&env), &2);
+
+    let signers = Vec::from_array(&env, [s1.clone(), rogue]);
+    let err = client.try_set_escalation_threshold(&signers, &7);
+    assert_eq!(err, Err(Ok(Error::AdminSignerNotInSet)));
 }
