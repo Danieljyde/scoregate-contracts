@@ -73,8 +73,14 @@ mod test_deprecation_compat;
 #[cfg(test)]
 mod test_pubkey_canonicalization;
 
-// #[cfg(test)]
-// mod test_rate_limit;
+#[cfg(test)]
+mod test_rate_limit;
+
+#[cfg(test)]
+mod test_consensus_config;
+
+#[cfg(test)]
+mod test_zk_range_proof;
 
 // #[cfg(test)]
 // mod test_multisig_service;
@@ -4904,6 +4910,13 @@ impl ScoreGateScoreContract {
         proof: Bytes,
         threshold: u32,
     ) -> bool {
+        if storage::is_paused(&env)
+            || storage::is_pair_paused(&env, &asset_pair)
+            || storage::is_frozen(&env)
+            || storage::is_embargoed(&env, &wallet)
+        {
+            return false;
+        }
         if !Self::asset_pair_is_bounded(&env, &asset_pair) {
             return false;
         }
@@ -9995,6 +10008,7 @@ impl ScoreGateScoreContract {
     /// - [`Error::NotInitialized`] if the contract has no admin.
     /// - [`Error::InvalidThreshold`] if min_epsilon or max_epsilon exceed
     ///   `DEFAULT_RISK_THRESHOLD` (75) or if min_epsilon > max_epsilon.
+    /// - [`Error::InvalidArgument`] if max_epsilon < min_epsilon + MIN_EPSILON_SPREAD.
     pub fn set_adaptive_epsilon_bounds(
         env: Env,
         admin_signers: Vec<Address>,
@@ -10010,6 +10024,9 @@ impl ScoreGateScoreContract {
         // Validate bounds
         if min_epsilon > max_epsilon {
             return Err(Error::InvalidThreshold);
+        }
+        if max_epsilon < min_epsilon.saturating_add(crate::constants::MIN_EPSILON_SPREAD) {
+            return Err(Error::InvalidArgument);
         }
         if max_epsilon > crate::constants::DEFAULT_RISK_THRESHOLD {
             return Err(Error::InvalidThreshold);

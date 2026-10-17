@@ -119,6 +119,8 @@ pub const EMBARGO_TTL_EXTEND_TO: u32 = 3_110_400;
 pub const MAX_EMBARGOED_WALLETS: u32 = 100;
 pub const DEFAULT_CONSENSUS_THRESHOLD_K: u32 = 2;
 pub const DEFAULT_CONSENSUS_EPSILON: u32 = 5;
+/// Minimum spread required between lower and upper adaptive epsilon bounds (#190).
+pub const MIN_EPSILON_SPREAD: u32 = 5;
 
 // ── Escalation / consecutive breach ──────────────────────────────────────────
 
