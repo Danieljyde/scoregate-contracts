@@ -171,6 +171,9 @@ pub fn derive_value_element(env: &Env, score: u32, timestamp: u64, z: &[u8; 32])
     let hash = env.crypto().sha256(&Bytes::from_array(env, &buf));
     let mut v = hash.to_bytes().to_array();
     v[31] &= BLS12_381_FIELD_BITMASK;
+    if v == NON_MEMBER_SENTINEL {
+        v[0] ^= 1;
+    }
     v
 }
 
@@ -245,6 +248,30 @@ pub fn verify_proof(env: &Env, commitment: &[u8; 32], z: &[u8; 32], v: &[u8; 32]
         compute_membership_witness(env, commitment, z, v)
     };
     *witness == expected
+}
+
+/// Verify a proof with explicit type check (membership vs non-membership).
+pub fn verify_proof_typed(
+    env: &Env,
+    is_member: bool,
+    commitment: &[u8; 32],
+    z: &[u8; 32],
+    v: &[u8; 32],
+    witness: &[u8; 32],
+) -> bool {
+    if is_member {
+        if *v == NON_MEMBER_SENTINEL {
+            return false;
+        }
+        let expected = compute_membership_witness(env, commitment, z, v);
+        *witness == expected
+    } else {
+        if *v != NON_MEMBER_SENTINEL {
+            return false;
+        }
+        let expected = compute_nonmembership_witness(env, commitment, z);
+        *witness == expected
+    }
 }
 
 /// Encode a proof blob: `proof_type(1) || z(32) || v(32) || witness(32)` = 97 bytes.

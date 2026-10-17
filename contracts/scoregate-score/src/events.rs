@@ -1122,3 +1122,17 @@ pub fn reconciliation_verified(
         ),
     );
 }
+
+/// Emitted when a service account's monotonic nonce approaches exhaustion.
+pub fn signer_nonce_near_exhaustion(
+    env: &Env,
+    service: &Address,
+    current_nonce: u64,
+    remaining: u64,
+) {
+    env.events().publish(
+        (symbol_short!("nonce_wrn"), EVENT_VERSION, service.clone()),
+        (current_nonce, remaining),
+    );
+}
+

@@ -218,3 +218,6 @@ pub const CONFIG_DRIFT_MANIFEST_FIELDS: &[&str] = &[
     "heartbeat_alert_threshold",
     "oracle_staleness_threshold",
 ];
+
+/// Nonce exhaustion warning threshold: emit alert event when nonce exceeds this threshold.
+pub const NONCE_EXHAUSTION_WARNING_THRESHOLD: u64 = u64::MAX - 10_000;

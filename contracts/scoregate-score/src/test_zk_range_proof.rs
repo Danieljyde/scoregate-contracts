@@ -29,11 +29,8 @@ fn test_verify_score_range_proof_success() {
     let r = Sc::from_u64(987654321);
     let (g_pt, h_pt, d) = get_generators(&env);
     
-    // C = g^score * h^r
     let c_pt = g_pt.mul(Sc::from_u64(score as u64), d).add(h_pt.mul(r, d), d);
     let commitment = compress_pt(&env, &c_pt);
-    std::println!("G_PT IS ON CURVE: {:?}", crate::zk_range_proof::is_on_curve(g_pt.x, g_pt.y, d));
-    std::println!("C_PT IS ON CURVE: {:?}", crate::zk_range_proof::is_on_curve(c_pt.x, c_pt.y, d));
 
     client.submit_score(
         &Vec::new(&env),
@@ -57,7 +54,7 @@ fn test_verify_score_range_proof_success() {
     // Blinding factor is -r
     let v_prime = threshold - 1 - score; // 9
     let r_prime = r.neg();
-    
+
     let prng = SeededPrng::new([1u8; 32]);
     let proof = prove_range_proof(&env, v_prime, r_prime, prng);
     let proof_bytes = proof.to_bytes(&env);
@@ -314,6 +311,64 @@ fn test_verify_score_range_proof_boundary_score_zero() {
     let v_prime = threshold - 1 - score;
     let r_prime = r.neg();
     let prng = SeededPrng::new([1u8; 32]);
+    let proof = prove_range_proof(&env, v_prime, r_prime, prng);
+    let proof_bytes = proof.to_bytes(&env);
+
+    let result = client.verify_score_range_proof(
+        &wallet,
+        &pair,
+        &commitment,
+        &proof_bytes,
+        &threshold,
+    );
+    assert!(result);
+}
+
+#[test]
+fn test_verify_score_range_proof_threshold_one_evaluation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ScoreGateScoreContract);
+    let client = ScoreGateScoreContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let service = Address::generate(&env);
+    client.initialize(&admin, &service);
+
+    let wallet = Address::generate(&env);
+    let pair = Symbol::new(&env, "XLM_USDC");
+
+    // Threshold = 1: tm1 = 0, so g^tm1 = g^0 = identity.
+    // Adding identity to c_inv must not trap on coordinate inversion.
+    let score = 0u32;
+    let threshold = 1u32;
+
+    let r = Sc::from_u64(99887766);
+    let (g_pt, h_pt, d) = get_generators(&env);
+    let c_pt = g_pt.mul(Sc::from_u64(score as u64), d).add(h_pt.mul(r, d), d);
+    let commitment = compress_pt(&env, &c_pt);
+
+    client.submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &score,
+        &false,
+        &false,
+        &1,
+        &90,
+        &1,
+        &Some(crate::ScoreAttestationInput {
+            attestation: crate::MaybeScoreAttestation::None,
+            threshold_attestation: crate::MaybeThresholdAttestation::None,
+            commitment: Some(commitment.clone().into()),
+        }),
+    );
+
+    let v_prime = threshold - 1 - score;
+    let r_prime = r.neg();
+    let prng = SeededPrng::new([2u8; 32]);
     let proof = prove_range_proof(&env, v_prime, r_prime, prng);
     let proof_bytes = proof.to_bytes(&env);
 
