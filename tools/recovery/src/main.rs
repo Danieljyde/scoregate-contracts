@@ -388,12 +388,13 @@ fn cmd_report(
     let snapshot: StateSnapshot = load_snapshot(snapshot_path)?;
     let now = chrono_now();
 
+    let pre_action_entry_count = snapshot.entry_count;
     let report = PostActionReport {
         snapshot,
         action_type: action.to_string(),
         action_timestamp: now,
         action_description: description.to_string(),
-        pre_action_entry_count: 0,
+        pre_action_entry_count,
         post_action_entry_count: None,
         checksum_verified: false,
         verification_notes: vec![
@@ -419,25 +420,34 @@ fn load_snapshot(path: &PathBuf) -> Result<StateSnapshot> {
     Ok(snapshot)
 }
 
-/// Returns an ISO-8601-like timestamp string. Uses system time via std::time.
-fn chrono_now() -> String {
-    let now =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let secs = now.as_secs();
-    // Format as ISO-8601 approximate
+/// Converts a Unix timestamp in seconds to an RFC-3339 / ISO-8601 UTC timestamp string.
+fn format_rfc3339(secs: u64) -> String {
     let days = secs / 86400;
     let time_secs = secs % 86400;
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
-    format!(
-        "2026-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        days / 30 + 1,
-        days % 30 + 1,
-        hours,
-        minutes,
-        seconds
-    )
+
+    // Howard Hinnant's algorithm for Gregorian calendar date conversion
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hours, minutes, seconds)
+}
+
+/// Returns an RFC-3339 / ISO-8601 compliant UTC timestamp string for the current system time.
+fn chrono_now() -> String {
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    format_rfc3339(now.as_secs())
 }
 
 #[cfg(test)]
@@ -492,5 +502,72 @@ mod tests {
         assert_eq!(truncated("", 16), "");
         assert_eq!(truncated("abc", 16), "abc");
         assert_eq!(truncated(&"x".repeat(64), 16), "x".repeat(16));
+    }
+
+    #[test]
+    fn cmd_report_preserves_pre_action_entry_count() {
+        let dir = std::env::temp_dir().join(format!("recovery_report_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let snapshot = StateSnapshot {
+            score_root: "a".repeat(64),
+            config_root: "b".repeat(64),
+            auth_root: "c".repeat(64),
+            entry_count: 5000,
+            ledger_seq: 100,
+            timestamp: 1700000000,
+        };
+
+        let snap_path = write_snapshot(&dir, "snap.json", &snapshot);
+        let report_path = dir.join("report.json");
+
+        cmd_report(&snap_path, "upgrade", "Contract upgrade to v2", &report_path)
+            .expect("cmd_report should succeed");
+
+        let report_content = fs::read_to_string(&report_path).unwrap();
+        let report: PostActionReport = serde_json::from_str(&report_content).unwrap();
+
+        assert_eq!(report.pre_action_entry_count, 5000);
+        assert_eq!(report.snapshot.entry_count, 5000);
+        assert_eq!(report.action_type, "upgrade");
+        assert_eq!(report.action_description, "Contract upgrade to v2");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn chrono_now_outputs_valid_rfc3339_timestamp() {
+        let ts = chrono_now();
+        assert!(ts.ends_with('Z'));
+        assert_eq!(ts.len(), 20);
+
+        let parts: Vec<&str> = ts.split('T').collect();
+        assert_eq!(parts.len(), 2);
+        let date_parts: Vec<&str> = parts[0].split('-').collect();
+        assert_eq!(date_parts.len(), 3);
+        let year: i32 = date_parts[0].parse().unwrap();
+        let month: u32 = date_parts[1].parse().unwrap();
+        let day: u32 = date_parts[2].parse().unwrap();
+
+        assert!(year >= 2026);
+        assert!((1..=12).contains(&month), "month {} out of bounds", month);
+        assert!((1..=31).contains(&day), "day {} out of bounds", day);
+
+        let time_str = parts[1].trim_end_matches('Z');
+        let time_parts: Vec<&str> = time_str.split(':').collect();
+        assert_eq!(time_parts.len(), 3);
+        let hour: u32 = time_parts[0].parse().unwrap();
+        let minute: u32 = time_parts[1].parse().unwrap();
+        let second: u32 = time_parts[2].parse().unwrap();
+        assert!((0..=23).contains(&hour));
+        assert!((0..=59).contains(&minute));
+        assert!((0..=59).contains(&second));
+    }
+
+    #[test]
+    fn format_rfc3339_known_timestamps() {
+        assert_eq!(format_rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_rfc3339(951827445), "2000-02-29T12:30:45Z");
+        assert_eq!(format_rfc3339(1792252758), "2026-10-17T15:59:18Z");
     }
 }

@@ -104,7 +104,7 @@ while IFS= read -r line; do
     --id "$CONTRACT_ID" --source scoregate_service --network "$NETWORK" -- \
     submit_score \
     --signers '[]' \
-    --wallet "$wallet" --asset_pair "$pair" \
+    --wallet "$wallet" --asset-pair "$pair" \
     --score "$score" --benford_flag false --ml_flag false \
     --timestamp "$timestamp" --confidence "$confidence" \
     --model_version 1 --attestation_input null
