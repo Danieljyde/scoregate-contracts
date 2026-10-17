@@ -27,6 +27,7 @@ pub const MAX_MANDATORY_REVIEWERS: u32 = 10;
 enum ArchitectureDataKey {
     ArchOwner,
     MandatoryReviewers,
+    PendingArchOwner,
 }
 
 // ── Admin / Service ─────────────────────────────────────────────────────────
@@ -3191,6 +3192,22 @@ pub fn set_arch_owner(env: &Env, owner: &Address) {
 
 pub fn get_arch_owner(env: &Env) -> Option<Address> {
     env.storage().instance().get(&ArchitectureDataKey::ArchOwner)
+}
+
+pub fn has_pending_arch_owner(env: &Env) -> bool {
+    env.storage().instance().has(&ArchitectureDataKey::PendingArchOwner)
+}
+
+pub fn set_pending_arch_owner(env: &Env, owner: &Address) {
+    env.storage().instance().set(&ArchitectureDataKey::PendingArchOwner, owner);
+}
+
+pub fn get_pending_arch_owner(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&ArchitectureDataKey::PendingArchOwner)
+}
+
+pub fn clear_pending_arch_owner(env: &Env) {
+    env.storage().instance().remove(&ArchitectureDataKey::PendingArchOwner);
 }
 
 pub fn set_mandatory_reviewers(env: &Env, reviewers: &Vec<Address>) {

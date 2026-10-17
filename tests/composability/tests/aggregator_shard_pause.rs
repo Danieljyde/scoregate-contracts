@@ -141,7 +141,7 @@ fn query_risk_gate_unaffected_by_shard_pair_level_pause() {
     let f = setup();
     assert!(f.aggregator.query_risk_gate(&f.wallet, &f.pair, &GATE_THRESHOLD));
 
-    f.shard_a.set_pair_paused(&f.pair, &true);
+    f.shard_a.set_pair_paused(&Vec::new(&f.env), &f.pair, &true);
     assert!(f.shard_a.is_pair_paused(&f.pair));
 
     // Current behavior: still passes. `set_pair_paused` only gates

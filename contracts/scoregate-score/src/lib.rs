@@ -237,6 +237,18 @@ mod test_schema_version_probes;
 #[cfg(test)]
 mod test_dos_read_patterns;
 
+#[cfg(test)]
+mod test_fee;
+
+#[cfg(test)]
+mod test_delegation;
+
+#[cfg(test)]
+mod test_arch_owner;
+
+#[cfg(test)]
+mod test_pause;
+
 use soroban_sdk::{
     contract, contractimpl, crypto::Hash, symbol_short, token, Address, Bytes, BytesN, Env,
     IntoVal, Symbol, SymbolStr, TryFromVal, Vec,
@@ -3747,7 +3759,8 @@ impl ScoreGateScoreContract {
     // ── Wallet Score Delegation ───────────────────────────────────────────────
 
     /// Registers a custodian wallet as the fallback score source for `sub_wallet`.
-    /// Admin only. Rejects cyclic delegation where a wallet delegates to itself,
+    /// Requires dual authorization from both contract admin and `sub_wallet`.
+    /// Rejects cyclic delegation where a wallet delegates to itself,
     /// or a custodian delegates back to one of its sub-wallets.
     pub fn set_score_delegate(
         env: Env,
@@ -3758,6 +3771,7 @@ impl ScoreGateScoreContract {
             return Err(Error::NotInitialized);
         }
         storage::get_admin(&env).require_auth();
+        sub_wallet.require_auth();
 
         let mut current = custodian.clone();
         if current == sub_wallet {
@@ -7026,24 +7040,33 @@ impl ScoreGateScoreContract {
     /// client.initialize(&admin, &service);
     /// let pair = symbol_short!("XLM_USDC");
     /// assert!(!client.is_pair_paused(&pair));
-    /// client.set_pair_paused(&pair, &true);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &true);
     /// assert!(client.is_pair_paused(&pair));
     /// // submit_score for this pair now returns Error::ContractPaused, while
     /// // every other pair is unaffected.
-    /// client.set_pair_paused(&pair, &false);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &false);
     /// assert!(!client.is_pair_paused(&pair));
     /// ```
     ///
     /// # Errors
     /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::AssetPairTooLong`] if `asset_pair` exceeds `MAX_ASSET_PAIR_LEN`.
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if multisig auth fails.
     /// - [`Error::ServiceSetFull`] if `asset_pair` is not already paused
     ///   and `PausedPairIndex` already holds `MAX_PAUSED_PAIRS` (50) entries.
-    pub fn set_pair_paused(env: Env, asset_pair: Symbol, paused: bool) -> Result<(), Error> {
+    pub fn set_pair_paused(
+        env: Env,
+        admin_signers: Vec<Address>,
+        asset_pair: Symbol,
+        paused: bool,
+    ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
-        admin.require_auth();
+        if !Self::asset_pair_is_bounded(&env, &asset_pair) {
+            return Err(Error::AssetPairTooLong);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
 
         if paused {
             if !storage::is_pair_paused(&env, &asset_pair)
@@ -7110,7 +7133,7 @@ impl ScoreGateScoreContract {
     /// client.initialize(&admin, &service);
     /// assert!(client.get_paused_pairs().is_empty());
     /// let pair = symbol_short!("XLM_USDC");
-    /// client.set_pair_paused(&pair, &true);
+    /// client.set_pair_paused(&Vec::new(&env), &pair, &true);
     /// assert_eq!(client.get_paused_pairs().len(), 1);
     /// ```
     pub fn get_paused_pairs(env: Env) -> Vec<Symbol> {
@@ -10118,16 +10141,21 @@ impl ScoreGateScoreContract {
     // ── Fee withdrawal ────────────────────────────────────────────────────────
 
     /// Sets the SEP-41 token contract address from which fees are withdrawn.
-    /// Must be called before `withdraw_fees` can succeed.  Admin only.
+    /// Must be called before `withdraw_fees` can succeed. Admin M-of-N
+    /// (see [`Self::require_admin_auth`]).
     ///
     /// # Errors
     /// - [`Error::NotInitialized`] if the contract has no admin yet.
-    pub fn set_fee_token(env: Env, token: Address) -> Result<(), Error> {
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if auth fails.
+    pub fn set_fee_token(
+        env: Env,
+        admin_signers: Vec<Address>,
+        token: Address,
+    ) -> Result<(), Error> {
         if !storage::has_admin(&env) {
             return Err(Error::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
-        admin.require_auth();
+        Self::require_admin_auth(&env, &admin_signers)?;
         storage::set_fee_token(&env, &token);
         events::fee_token_set(&env, &token);
         Ok(())
@@ -13420,20 +13448,76 @@ impl ScoreGateScoreContract {
 
     // ── Architecture Ownership & Reviewer Routing ─────────────────────────────
 
-    pub fn set_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
-        // Requires authorization from current admin or existing arch owner
+    /// Proposes a new architecture owner (step 1 of 2).
+    /// Requires authorization from existing arch owner (if set) or contract admin.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    pub fn propose_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
         if let Some(current_owner) = storage::get_arch_owner(&env) {
             current_owner.require_auth();
         } else {
             storage::get_admin(&env).require_auth();
         }
 
-        storage::set_arch_owner(&env, &new_owner);
-
-        // Emit event for architecture ownership change
-        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), new_owner);
-
+        storage::set_pending_arch_owner(&env, &new_owner);
+        env.events().publish((Symbol::new(&env, "arch_owner_proposed"),), new_owner);
         Ok(())
+    }
+
+    /// Accepts pending architecture ownership (step 2 of 2).
+    /// Must be called by the address nominated via [`propose_arch_owner`](Self::propose_arch_owner).
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::NoPendingAdminTransfer`] if no architecture owner transfer is pending.
+    pub fn accept_arch_owner(env: Env) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        let pending = storage::get_pending_arch_owner(&env).ok_or(Error::NoPendingAdminTransfer)?;
+        pending.require_auth();
+
+        storage::set_arch_owner(&env, &pending);
+        storage::clear_pending_arch_owner(&env);
+        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), pending);
+        Ok(())
+    }
+
+    /// Emergency recovery override for architecture ownership by contract admin multisig.
+    /// Intervenes to recover ownership if the architecture owner key becomes unresponsive or lost.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the contract has no admin yet.
+    /// - [`Error::InsufficientAdminSigners`] / [`Error::AdminSignerNotInSet`] if auth fails.
+    pub fn recover_arch_owner(
+        env: Env,
+        admin_signers: Vec<Address>,
+        new_owner: Address,
+    ) -> Result<(), Error> {
+        if !storage::has_admin(&env) {
+            return Err(Error::NotInitialized);
+        }
+        Self::require_admin_auth(&env, &admin_signers)?;
+        storage::set_arch_owner(&env, &new_owner);
+        storage::clear_pending_arch_owner(&env);
+        env.events().publish((Symbol::new(&env, "arch_owner_updated"),), new_owner);
+        Ok(())
+    }
+
+    /// Returns the pending architecture owner, or `None` if no transfer is in progress.
+    pub fn get_pending_arch_owner(env: Env) -> Option<Address> {
+        storage::get_pending_arch_owner(&env)
+    }
+
+    /// Initiates two-step architecture ownership transfer by proposing `new_owner`.
+    /// Ownership takes effect only once `new_owner` calls [`accept_arch_owner`](Self::accept_arch_owner).
+    /// Single-step immediate transfer is prevented to avoid accidental lockout.
+    pub fn set_arch_owner(env: Env, new_owner: Address) -> Result<(), Error> {
+        Self::propose_arch_owner(env, new_owner)
     }
 
     pub fn get_arch_owner(env: Env) -> Option<Address> {

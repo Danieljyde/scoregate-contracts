@@ -53,7 +53,7 @@ fn test_pair_pause_blocks_submit_score() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
 
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -89,7 +89,7 @@ fn test_pair_pause_allows_read() {
         &None,
     );
 
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
     // get_score
     let score = client.get_score(&wallet, &pair);
@@ -115,7 +115,7 @@ fn test_pair_unpause_restores_submissions() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
 
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
     let blocked = client.try_submit_score(
         &Vec::new(&env),
         &wallet,
@@ -130,7 +130,7 @@ fn test_pair_unpause_restores_submissions() {
     );
     assert_eq!(blocked, Err(Ok(Error::PairPaused)));
 
-    client.set_pair_paused(&pair, &false);
+    client.set_pair_paused(&Vec::new(&env), &pair, &false);
     client.submit_score(
         &Vec::new(&env),
         &wallet,
@@ -156,7 +156,7 @@ fn test_batch_pair_paused_entry_skipped() {
     let paused_pair = symbol_short!("XLM_USDC");
     let live_pair = symbol_short!("XLM_BTC");
 
-    client.set_pair_paused(&paused_pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &paused_pair, &true);
 
     let mut batch: Vec<ScoreSubmission> = Vec::new(&env);
     batch.push_back(ScoreSubmission {
@@ -206,8 +206,8 @@ fn test_global_pause_takes_precedence_over_pair_pause() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
 
-    client.set_pair_paused(&pair, &true);
-    client.pause();
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
+    client.pause(&Vec::new(&env));
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -256,7 +256,7 @@ fn test_set_pair_paused_requires_admin() {
     client.initialize(&admin, &service);
 
     let pair = symbol_short!("XLM_USDC");
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 }
 
 // ── Index management ───────────────────────────────────────────────────────────
@@ -268,9 +268,9 @@ fn test_get_paused_pairs_reflects_state() {
     let pair_b = symbol_short!("XLM_BTC");
     let pair_c = symbol_short!("XLM_EURC");
 
-    client.set_pair_paused(&pair_a, &true);
-    client.set_pair_paused(&pair_b, &true);
-    client.set_pair_paused(&pair_c, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair_a, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair_b, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair_c, &true);
 
     let paused = client.get_paused_pairs();
     assert_eq!(paused.len(), 3);
@@ -278,7 +278,7 @@ fn test_get_paused_pairs_reflects_state() {
     assert!(paused.contains(&pair_b));
     assert!(paused.contains(&pair_c));
 
-    client.set_pair_paused(&pair_b, &false);
+    client.set_pair_paused(&Vec::new(&env), &pair_b, &false);
 
     let paused = client.get_paused_pairs();
     assert_eq!(paused.len(), 2);
@@ -292,12 +292,12 @@ fn test_paused_pair_index_full_rejected() {
     let (env, client, _admin) = setup();
 
     for i in 0..MAX_PAUSED_PAIRS {
-        client.set_pair_paused(&pair_symbol(&env, i), &true);
+        client.set_pair_paused(&Vec::new(&env), &pair_symbol(&env, i), &true);
     }
     assert_eq!(client.get_paused_pairs().len(), MAX_PAUSED_PAIRS);
 
     let overflow_pair = Symbol::new(&env, "OVERFLOW");
-    let result = client.try_set_pair_paused(&overflow_pair, &true);
+    let result = client.try_set_pair_paused(&Vec::new(&env), &overflow_pair, &true);
     assert_eq!(result, Err(Ok(Error::PausedPairIndexFull)));
 
     // The index is unaffected by the rejected attempt.
@@ -310,21 +310,21 @@ fn test_paused_pair_index_full_does_not_block_repause_or_unpause() {
     let (env, client, _admin) = setup();
 
     for i in 0..MAX_PAUSED_PAIRS {
-        client.set_pair_paused(&pair_symbol(&env, i), &true);
+        client.set_pair_paused(&Vec::new(&env), &pair_symbol(&env, i), &true);
     }
 
     // Re-pausing an already-paused pair is a no-op on the index, not a
     // capacity error, even though the index is at capacity.
     let already_paused = pair_symbol(&env, 0);
-    client.set_pair_paused(&already_paused, &true);
+    client.set_pair_paused(&Vec::new(&env), &already_paused, &true);
     assert_eq!(client.get_paused_pairs().len(), MAX_PAUSED_PAIRS);
 
     // Unpausing always succeeds and frees a slot.
-    client.set_pair_paused(&already_paused, &false);
+    client.set_pair_paused(&Vec::new(&env), &already_paused, &false);
     assert_eq!(client.get_paused_pairs().len(), MAX_PAUSED_PAIRS - 1);
 
     let overflow_pair = Symbol::new(&env, "OVERFLOW");
-    client.set_pair_paused(&overflow_pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &overflow_pair, &true);
     assert_eq!(client.get_paused_pairs().len(), MAX_PAUSED_PAIRS);
 }
 
@@ -335,7 +335,7 @@ fn test_pair_paused_event_emitted() {
     let (env, client, _admin) = setup();
     let pair = symbol_short!("XLM_USDC");
 
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
     let events = env.events().all();
     let (_contract_id, topics, data) = events.get(events.len() - 1);
@@ -348,7 +348,7 @@ fn test_pair_paused_event_emitted() {
     );
     assert!(bool::try_from_val(&env, &data).unwrap());
 
-    client.set_pair_paused(&pair, &false);
+    client.set_pair_paused(&Vec::new(&env), &pair, &false);
     let events = env.events().all();
     let (_contract_id, topics, data) = events.get(events.len() - 1);
     assert_eq!(
