@@ -267,3 +267,42 @@ fn inv18_fails_when_depth_exceeds_max() {
         invariants::invariant_check(&env);
     });
 }
+
+// ── Invariant #15: histogram bucket sum equals ScoreEntryIndex.len() ────────
+
+#[test]
+fn inv15_passes_after_normal_submit() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    let score = sample_score(50);
+
+    env.as_contract(&id, || {
+        storage::set_score(&env, &wallet, &pair, &score);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::track_score_entry(&env, &wallet, &pair);
+        storage::update_histogram_on_write(&env, None, score.score);
+
+        invariants::check_histogram_invariants(&env);
+        invariants::invariant_check(&env);
+    });
+}
+
+#[test]
+#[should_panic(expected = "INVARIANT #15 VIOLATED")]
+fn inv15_fails_when_histogram_distorted() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    let score = sample_score(50);
+
+    env.as_contract(&id, || {
+        storage::set_score(&env, &wallet, &pair, &score);
+        storage::track_score_entry(&env, &wallet, &pair);
+        // Direct omission of histogram update: bucket sum (0) != live entries (1)
+        invariants::check_histogram_invariants(&env);
+    });
+}
+

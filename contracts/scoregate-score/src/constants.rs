@@ -182,6 +182,9 @@ pub const MAX_EXPIRING_ENTRIES_PER_CALL: u32 = 100;
 /// Maximum number of concurrently pending parameter-change proposals.
 pub const MAX_PENDING_PARAMETER_PROPOSALS: u32 = 10;
 
+/// Maximum number of parameter proposal IDs retained in the historical proposal index.
+pub const MAX_PARAMETER_PROPOSAL_HISTORY: u32 = 100;
+
 /// Time-lock delay before a pending simple parameter change may be applied.
 pub const DEFAULT_PARAM_CHANGE_DELAY_SECS: u64 = 86_400;
 

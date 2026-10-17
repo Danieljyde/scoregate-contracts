@@ -53,6 +53,7 @@ pub fn invariant_check(env: &Env) {
     check_admin_transfer_invariants(env);
     check_pause_index_invariants(env);
     check_decay_rate_invariants(env);
+    check_histogram_invariants(env);
 }
 
 // ─── Config invariants ────────────────────────────────────────────────────────
@@ -302,6 +303,28 @@ fn check_pause_index_invariants(env: &Env) {
             );
         }
     }
+}
+
+// ─── Histogram invariants ───────────────────────────────────────────────────
+
+/// Rationale for invariant #15:
+/// The score distribution histogram aggregates score frequencies across buckets.
+/// The sum of all bucket counts must match the total number of live entries
+/// tracked in `ScoreEntryIndex`. A discrepancy indicates that a score write or
+/// deletion failed to update the histogram or updated the wrong bucket.
+#[cfg(any(test, feature = "testutils"))]
+pub fn check_histogram_invariants(env: &Env) {
+    let histogram = storage::get_score_histogram(env);
+    let mut bucket_sum: u64 = 0;
+    for i in 0..histogram.buckets.len() {
+        bucket_sum = bucket_sum.saturating_add(histogram.buckets.get(i).unwrap_or(0));
+    }
+    let live_entries_len = storage::get_score_entry_index(env).len() as u64;
+    assert_eq!(
+        bucket_sum,
+        live_entries_len,
+        "INVARIANT #15 VIOLATED: histogram bucket sum ({bucket_sum}) does not match ScoreEntryIndex length ({live_entries_len})"
+    );
 }
 
 // ─── Standalone invariant helpers (usable from migration tooling) ─────────────

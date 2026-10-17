@@ -302,3 +302,23 @@ pub fn commitment_to_bytes48(env: &Env, commitment: &[u8; 32]) -> BytesN<48> {
     buf[16..48].copy_from_slice(commitment);
     BytesN::from_array(env, &buf)
 }
+
+/// Safely copies a string into a 56-byte buffer with zero-padding,
+/// bounded up to min(s.len(), 56) bytes without panicking regardless of string length.
+pub fn copy_str_to_56_bytes(s: &soroban_sdk::String) -> [u8; 56] {
+    let mut buf = [0u8; 56];
+    let len = s.len() as usize;
+    let mut temp = [0u8; 256];
+    if len <= 256 {
+        s.copy_into_slice(&mut temp[..len]);
+        let copy_len = len.min(56);
+        buf[..copy_len].copy_from_slice(&temp[..copy_len]);
+    }
+    buf
+}
+
+/// Bounded slice copy of an Address to a 56-byte buffer, preventing host traps
+/// on variable-length addresses (such as 69-character muxed accounts or short mock addresses).
+pub fn copy_address_to_56_bytes(address: &soroban_sdk::Address) -> [u8; 56] {
+    copy_str_to_56_bytes(&address.to_string())
+}

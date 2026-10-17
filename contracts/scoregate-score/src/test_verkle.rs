@@ -818,3 +818,40 @@ fn differential_sequence_mixed_operations() {
         "commitment must match after score replacement in sequence"
     );
 }
+
+#[test]
+fn test_verkle_bounded_address_slice_copying_short_and_muxed() {
+    let (env, client, _admin, _service) = initialized();
+
+    // 1. Short address string (< 56 bytes) does not trap and zero-pads remainder
+    let short_str = soroban_sdk::String::from_str(&env, "short_address");
+    let short_buf = verkle::copy_str_to_56_bytes(&short_str);
+    assert_eq!(&short_buf[..13], b"short_address");
+    assert_eq!(&short_buf[13..], &[0u8; 43]);
+
+    // 2. Exact 56-byte address string
+    let exact_bytes = b"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M";
+    let exact_str = soroban_sdk::String::from_str(&env, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M");
+    let exact_buf = verkle::copy_str_to_56_bytes(&exact_str);
+    assert_eq!(&exact_buf[..], exact_bytes);
+
+    // 3. 69-character Stellar muxed account string does not trap and truncates to 56 bytes
+    let muxed_str_raw = "MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGQAAAAAAAAABAAA";
+    let muxed_str = soroban_sdk::String::from_str(&env, muxed_str_raw);
+    let muxed_buf = verkle::copy_str_to_56_bytes(&muxed_str);
+    assert_eq!(&muxed_buf[..], &muxed_str_raw.as_bytes()[..56]);
+
+    // 4. copy_address_to_56_bytes on normal address
+    let wallet = Address::generate(&env);
+    let addr_buf = verkle::copy_address_to_56_bytes(&wallet);
+    let expected_len = (wallet.to_string().len() as usize).min(56);
+    let mut temp = [0u8; 256];
+    wallet.to_string().copy_into_slice(&mut temp[..wallet.to_string().len() as usize]);
+    assert_eq!(&addr_buf[..expected_len], &temp[..expected_len]);
+
+    // 5. Proof generation and verification with contract client does not trap
+    let pair = symbol_short!("XLMUSDC");
+    let proof = client.get_membership_proof(&wallet, &pair);
+    assert_eq!(proof.len(), 97);
+}
+

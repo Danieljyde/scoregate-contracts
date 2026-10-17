@@ -116,6 +116,7 @@ single source of truth for every cap:**
 | `MAX_DISPUTES_PER_ACTOR` | 5 | `Error::ActorDisputeLimitExceeded` |
 | `MAX_TRACKED_SCORE_ENTRIES` / `MAX_EXPIRING_ENTRIES_PER_CALL` | 500 / 100 | bounds per-call TTL-sweep work |
 | `MAX_PENDING_PARAMETER_PROPOSALS` | 10 | `Error::TooManyPendingParameterProposals` |
+| `MAX_PARAMETER_PROPOSAL_HISTORY` | 100 | historical parameter proposal audit index cap |
 | `MAX_RATE_LIMIT_OVERRIDE_LOG` | 100 | rate-limit override audit log |
 | `MAX_MERKLE_PROOF_DEPTH` | 30 | rejects oversized Merkle proofs before verification |
 | `MAX_WALLET_PAIRS` | 20 | bulk-operation input size |
