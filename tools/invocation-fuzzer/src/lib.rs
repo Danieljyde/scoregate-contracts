@@ -1,11 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
+use mock_amm::{FailPolicy as AmmFailPolicy, MockAmm, MockAmmClient};
+use mock_lending::{MockLending, MockLendingClient};
 use scoregate_aggregator::{ScoreGateAggregator, ScoreGateAggregatorClient};
 use scoregate_score::{
     BatchAttestation, ScoreGateScoreContract, ScoreGateScoreContractClient, ScoreSubmission,
     ScoreSubmissionWithProof,
 };
-use mock_amm::{FailPolicy as AmmFailPolicy, MockAmm, MockAmmClient};
-use mock_lending::{MockLending, MockLendingClient};
 use serde::{Deserialize, Serialize};
 use soroban_sdk::{
     testutils::{Address as _, EnvTestConfig, Events as _, Ledger as _},
@@ -414,7 +414,11 @@ fn invoke(fixture: &Fixture<'_>, operation: &Operation) -> Result<String> {
             Ok(format!("{:?}", fixture.amm.try_swap(&fixture.wallet, &pair, amount)))
         }
         Operation::AmmLiquidity { amount } => {
-            Ok(format!("{:?}", fixture.amm.try_provide_liquidity_gated(&fixture.wallet, amount)))
+            let pair = soroban_sdk::symbol_short!("XLM_USDC");
+            Ok(format!(
+                "{:?}",
+                fixture.amm.try_provide_liquidity_gated(&fixture.wallet, &pair, amount)
+            ))
         }
         Operation::LendingBorrow { amount, asset_pair } => {
             let pair = symbol(&fixture.env, asset_pair)?;

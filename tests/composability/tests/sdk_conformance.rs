@@ -1,5 +1,5 @@
-use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use mock_amm::{FailPolicy as AmmFailPolicy, MockAmm, MockAmmClient, MockAmmError};
+use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use serde::Deserialize;
 use soroban_sdk::{
     symbol_short,
@@ -134,7 +134,7 @@ fn sdk_conformance() {
             env.ledger().with_mut(|l| l.timestamp += a);
         }
 
-        let result = amm.try_provide_liquidity_gated(&wallet, &1_000);
+        let result = amm.try_provide_liquidity_gated(&wallet, &symbol_short!("XLM_USDC"), &1_000);
 
         let mapped_result = match result {
             Ok(Ok(())) => "allow",

@@ -41,3 +41,13 @@ pub fn oracle_updated(env: &Env, new_oracle: &Address) {
 pub fn capabilities_refreshed(env: &Env, expanded_score: bool) {
     env.events().publish((symbol_short!("cap_rfsh"), EVENT_VERSION), expanded_score);
 }
+
+/// Emitted when the fixture administrator is rotated via `set_admin`.
+pub fn admin_updated(env: &Env, new_admin: &Address) {
+    env.events().publish((symbol_short!("adm_upd"), EVENT_VERSION), new_admin.clone());
+}
+
+/// Emitted when the admin updates the maximum borrow ceiling via `set_max_borrow_amount`.
+pub fn max_borrow_updated(env: &Env, max_borrow: i128) {
+    env.events().publish((symbol_short!("max_brw"), EVENT_VERSION), max_borrow);
+}

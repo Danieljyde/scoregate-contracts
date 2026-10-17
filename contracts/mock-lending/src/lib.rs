@@ -15,9 +15,13 @@
 //! is active.
 
 mod events;
+#[cfg(test)]
+mod test;
 
 use scoregate_score::ScoreGateScoreContractClient;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+
+pub const DEFAULT_MAX_BORROW_AMOUNT: i128 = 10_000_000_000_000_000_000;
 
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -35,7 +39,7 @@ pub enum MockLendingError {
     /// ScoreGate's `query_risk_gate_with_confidence` returned `false` for
     /// this wallet — either too risky, no score, or insufficient confidence.
     RiskGateRejected = 2,
-    /// Borrow amount must be positive.
+    /// Borrow amount must be positive and within the maximum borrow ceiling.
     InvalidAmount = 3,
     OracleUnavailable = 4,
     StaleScore = 5,
@@ -59,6 +63,7 @@ enum DataKey {
     MaxStalenessSecs,
     RequiredOracleVersion,
     ExpandedRiskScore,
+    MaxBorrowAmount,
 }
 
 #[contract]
@@ -89,7 +94,46 @@ impl MockLending {
         let client = ScoreGateScoreContractClient::new(&env, &scoregate);
         let expanded_score = matches!(client.try_get_version(), Ok(Ok(version)) if version >= 5);
         env.storage().instance().set(&DataKey::ExpandedRiskScore, &expanded_score);
+        env.storage().instance().set(&DataKey::MaxBorrowAmount, &DEFAULT_MAX_BORROW_AMOUNT);
         Ok(())
+    }
+
+    /// Transfer administrative authority to `new_admin`. Requires authorization
+    /// of the current admin and emits an `adm_upd` event. (Issue #202)
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), MockLendingError> {
+        Self::require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        events::admin_updated(&env, &new_admin);
+        Ok(())
+    }
+
+    /// Read the currently configured fixture admin.
+    pub fn get_admin(env: Env) -> Result<Address, MockLendingError> {
+        env.storage().instance().get(&DataKey::Admin).ok_or(MockLendingError::NotConfigured)
+    }
+
+    /// Configure the maximum borrow amount ceiling. (Issue #204)
+    pub fn set_max_borrow_amount(
+        env: Env,
+        admin: Address,
+        max_borrow_amount: i128,
+    ) -> Result<(), MockLendingError> {
+        Self::require_admin(&env, &admin)?;
+        if max_borrow_amount <= 0 {
+            return Err(MockLendingError::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::MaxBorrowAmount, &max_borrow_amount);
+        events::max_borrow_updated(&env, max_borrow_amount);
+        Ok(())
+    }
+
+    /// Read the configured maximum borrow amount ceiling.
+    pub fn get_max_borrow_amount(env: Env) -> i128 {
+        env.storage().instance().get(&DataKey::MaxBorrowAmount).unwrap_or(DEFAULT_MAX_BORROW_AMOUNT)
     }
 
     /// Register or rotate the ScoreGate oracle this market consults for gate
@@ -178,7 +222,12 @@ impl MockLending {
         asset_pair: Symbol,
         amount: i128,
     ) -> Result<(), MockLendingError> {
-        if amount <= 0 {
+        let max_borrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxBorrowAmount)
+            .unwrap_or(DEFAULT_MAX_BORROW_AMOUNT);
+        if amount <= 0 || amount > max_borrow {
             return Err(MockLendingError::InvalidAmount);
         }
 

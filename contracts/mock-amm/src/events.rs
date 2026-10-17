@@ -23,9 +23,21 @@ pub fn swap_executed(env: &Env, user: &Address, asset_pair: &Symbol, amount: i12
 }
 
 /// Emitted when `provide_liquidity_gated` clears the risk gate and completes.
-pub fn liquidity_provided(env: &Env, provider: &Address, amount: i128) {
-    env.events()
-        .publish((symbol_short!("liq_prov"), EVENT_VERSION), (provider.clone(), amount));
+pub fn liquidity_provided(env: &Env, provider: &Address, asset_pair: &Symbol, amount: i128) {
+    env.events().publish(
+        (symbol_short!("liq_prov"), EVENT_VERSION, asset_pair.clone()),
+        (provider.clone(), amount),
+    );
+}
+
+/// Emitted when the fixture administrator is rotated via `set_admin`.
+pub fn admin_updated(env: &Env, new_admin: &Address) {
+    env.events().publish((symbol_short!("adm_upd"), EVENT_VERSION), new_admin.clone());
+}
+
+/// Emitted when the protocol pause state is updated via `set_paused`.
+pub fn paused_updated(env: &Env, paused: bool) {
+    env.events().publish((symbol_short!("pause_upd"), EVENT_VERSION), paused);
 }
 
 /// Emitted when the admin updates the liquidity gate config via
