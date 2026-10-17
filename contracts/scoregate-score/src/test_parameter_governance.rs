@@ -422,3 +422,36 @@ fn test_execute_nonexistent_proposal_returns_not_found() {
     let result = client.try_execute_parameter_change(&admin_signers(&env, &admin), &bogus_id);
     assert_eq!(result, Err(Ok(Error::ParameterProposalNotFound)));
 }
+
+#[test]
+fn test_get_parameter_proposal_is_purely_read_only_and_does_not_mutate_storage() {
+    let (env, client, admin, _service) = setup();
+    let value = encode_u64(&env, MIN_COOLDOWN_SECS);
+
+    let proposal_id = client.propose_parameter_change(
+        &admin_signers(&env, &admin),
+        &param_key_cooldown(),
+        &value,
+    );
+
+    // Advance time past proposal expiry (proposed_at + 2 * time_lock + 1)
+    advance_to(&env, START_TS + DEFAULT_UPGRADE_DELAY_SECS * 2 + 1);
+
+    // Calling get_parameter_proposal must not mutate storage or prune the proposal
+    let record = client.get_parameter_proposal(&proposal_id);
+    assert_eq!(record.status, ParameterProposalStatus::Pending);
+
+    // Pending IDs must still contain proposal_id (not pruned by getter)
+    assert_eq!(client.get_pending_param_prop_ids(), Vec::from_array(&env, [proposal_id]));
+
+    // Advance past 48h buffer and verify cleanup_expired_param_proposals cleans it up
+    advance_to(&env, START_TS + DEFAULT_UPGRADE_DELAY_SECS * 2 + 48 * 3600 + 10);
+    let cleaned = client.cleanup_expired_param_proposals(&admin_signers(&env, &admin));
+    assert_eq!(cleaned, 1);
+
+    // Now proposal is deleted
+    assert_eq!(
+        client.try_get_parameter_proposal(&proposal_id),
+        Err(Ok(Error::ParameterProposalNotFound))
+    );
+}
