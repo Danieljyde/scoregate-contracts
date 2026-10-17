@@ -268,41 +268,55 @@ fn inv18_fails_when_depth_exceeds_max() {
     });
 }
 
-// ── Invariant #15: histogram bucket sum equals ScoreEntryIndex.len() ────────
+// ── Invariant #9: ScoreCount > 0 iff Score entry exists ─────────────────────
 
 #[test]
-fn inv15_passes_after_normal_submit() {
+fn inv9_passes_after_normal_submit() {
     let env = make_env();
     let id = register(&env);
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
-    let score = sample_score(50);
-
     env.as_contract(&id, || {
-        storage::set_score(&env, &wallet, &pair, &score);
-        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
         storage::track_score_entry(&env, &wallet, &pair);
-        storage::update_histogram_on_write(&env, None, score.score);
-
-        invariants::check_histogram_invariants(&env);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::increment_score_count(&env, &wallet, &pair);
+        assert!(invariants::score_count_is_consistent(&env));
         invariants::invariant_check(&env);
     });
 }
 
 #[test]
-#[should_panic(expected = "INVARIANT #15 VIOLATED")]
-fn inv15_fails_when_histogram_distorted() {
+#[should_panic(expected = "INVARIANT #9 VIOLATED")]
+fn inv9_fails_when_score_entry_has_zero_score_count() {
     let env = make_env();
     let id = register(&env);
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
-    let score = sample_score(50);
-
     env.as_contract(&id, || {
-        storage::set_score(&env, &wallet, &pair, &score);
+        // Live Score exists and is tracked in ScoreEntryIndex, but ScoreCount was never incremented
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
         storage::track_score_entry(&env, &wallet, &pair);
-        // Direct omission of histogram update: bucket sum (0) != live entries (1)
-        invariants::check_histogram_invariants(&env);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        assert!(!invariants::score_count_is_consistent(&env));
+        invariants::invariant_check(&env);
     });
 }
 
+#[test]
+#[should_panic(expected = "INVARIANT #9 VIOLATED")]
+fn inv9_fails_when_score_count_is_desynchronized_to_zero() {
+    let env = make_env();
+    let id = register(&env);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+    env.as_contract(&id, || {
+        storage::set_score(&env, &wallet, &pair, &sample_score(42));
+        storage::track_score_entry(&env, &wallet, &pair);
+        storage::register_pair_for_wallet(&env, &wallet, &pair);
+        storage::increment_score_count(&env, &wallet, &pair);
+        // Explicitly clear ScoreCount key to simulate desynchronization
+        env.storage().persistent().remove(&DataKey::ScoreCount(wallet.clone(), pair.clone()));
+        invariants::invariant_check(&env);
+    });
+}

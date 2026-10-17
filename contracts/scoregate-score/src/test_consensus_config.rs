@@ -20,17 +20,17 @@ fn setup<'a>() -> (Env, ScoreGateScoreContractClient<'a>) {
 #[test]
 fn test_set_consensus_config_happy_path() {
     let (_env, client) = setup();
-    client.set_consensus_config(&3, &10).unwrap();
+    client.set_consensus_config(&3, &10);
     assert_eq!(client.get_consensus_config(), (3, 10));
 }
 
 #[test]
 fn test_set_consensus_config_updates_both_atomically() {
     let (_env, client) = setup();
-    client.set_consensus_config(&2, &5).unwrap();
+    client.set_consensus_config(&2, &5);
     assert_eq!(client.get_consensus_config(), (2, 5));
     // Override with new values — both change together.
-    client.set_consensus_config(&5, &20).unwrap();
+    client.set_consensus_config(&5, &20);
     assert_eq!(client.get_consensus_config(), (5, 20));
 }
 
@@ -38,10 +38,10 @@ fn test_set_consensus_config_updates_both_atomically() {
 fn test_set_consensus_config_boundary_values() {
     let (_env, client) = setup();
     // k=1 and epsilon=0 are the lowest valid values.
-    client.set_consensus_config(&1, &0).unwrap();
+    client.set_consensus_config(&1, &0);
     assert_eq!(client.get_consensus_config(), (1, 0));
     // epsilon=100 is the highest valid value.
-    client.set_consensus_config(&1, &100).unwrap();
+    client.set_consensus_config(&1, &100);
     assert_eq!(client.get_consensus_config(), (1, 100));
 }
 
@@ -88,3 +88,32 @@ fn test_set_consensus_config_non_admin_rejected() {
     let result = client.try_set_consensus_config(&2, &5);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_set_adaptive_epsilon_bounds_spread_enforced() {
+    let (env, client) = setup();
+    let admin_signers = soroban_sdk::Vec::new(&env);
+
+    // Spread == 5 (min 5, max 10) is accepted (MIN_EPSILON_SPREAD = 5).
+    let result = client.try_set_adaptive_epsilon_bounds(&admin_signers, &true, &5, &10);
+    assert!(result.is_ok());
+    assert_eq!(client.get_adaptive_epsilon_bounds(), (true, 5, 10));
+
+    // Spread > 5 (min 5, max 20) is accepted.
+    let result = client.try_set_adaptive_epsilon_bounds(&admin_signers, &true, &5, &20);
+    assert!(result.is_ok());
+    assert_eq!(client.get_adaptive_epsilon_bounds(), (true, 5, 20));
+
+    // Equal bounds (min == max) must fail.
+    let result = client.try_set_adaptive_epsilon_bounds(&admin_signers, &true, &10, &10);
+    assert_eq!(result, Err(Ok(Error::InvalidArgument)));
+
+    // Spread < 5 (min 10, max 14) must fail.
+    let result = client.try_set_adaptive_epsilon_bounds(&admin_signers, &true, &10, &14);
+    assert_eq!(result, Err(Ok(Error::InvalidArgument)));
+
+    // Inverted bounds (min > max) must fail.
+    let result = client.try_set_adaptive_epsilon_bounds(&admin_signers, &true, &15, &10);
+    assert_eq!(result, Err(Ok(Error::InvalidThreshold)));
+}
+

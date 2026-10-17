@@ -133,7 +133,7 @@ const DOMAIN_NONMEMBER: u8 = 0x07;
 /// Derive the KZG evaluation point `z` for a `(wallet_bytes, pair_bytes)` key.
 ///
 /// ```text
-/// preimage = DOMAIN_EVAL_POINT || wallet_bytes[..56] || pair_bytes[..9]
+/// preimage = DOMAIN_EVAL_POINT || wallet_bytes[..56] || pair_bytes[..9] || contract_bytes[..56]
 /// z        = SHA-256(preimage) with top-3 bits zeroed (field reduction)
 /// ```
 pub fn derive_evaluation_point(
@@ -141,10 +141,14 @@ pub fn derive_evaluation_point(
     wallet_bytes: &[u8; 56],
     pair_bytes: &[u8; 9],
 ) -> [u8; 32] {
-    let mut buf = [0u8; 66]; // 1 + 56 + 9
+    let mut contract_buf = [0u8; 56];
+    env.current_contract_address().to_string().copy_into_slice(&mut contract_buf);
+
+    let mut buf = [0u8; 122]; // 1 + 56 + 9 + 56
     buf[0] = DOMAIN_EVAL_POINT;
     buf[1..57].copy_from_slice(wallet_bytes);
     buf[57..66].copy_from_slice(pair_bytes);
+    buf[66..122].copy_from_slice(&contract_buf);
     let hash = env.crypto().sha256(&Bytes::from_array(env, &buf));
     let mut z = hash.to_bytes().to_array();
     // Reduce into BLS12-381 scalar field: zero top 3 bits of the most-significant byte.

@@ -127,7 +127,7 @@ fn snapshot_reveal_window_elapsed_preserves_live_score_state() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let token = Address::generate(&env);
-    client.set_fee_token(&token);
+    client.set_fee_token(&Vec::new(&env), &token);
     client.submit_score(
         &Vec::new(&env),
         &wallet,

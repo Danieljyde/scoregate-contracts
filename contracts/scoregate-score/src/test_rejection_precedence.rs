@@ -43,7 +43,7 @@ fn setup(
 #[test]
 fn test_pair_paused_beats_invalid_score() {
     let (env, client, _admin, _service, pair) = setup();
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
     let wallet = Address::generate(&env);
     let mut batch: Vec<ScoreSubmission> = Vec::new(&env);
@@ -73,7 +73,7 @@ fn test_pair_paused_beats_invalid_score() {
 #[test]
 fn test_pair_paused_beats_invalid_confidence() {
     let (env, client, _admin, _service, pair) = setup();
-    client.set_pair_paused(&pair, &true);
+    client.set_pair_paused(&Vec::new(&env), &pair, &true);
 
     let wallet = Address::generate(&env);
     let mut batch: Vec<ScoreSubmission> = Vec::new(&env);

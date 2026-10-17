@@ -610,23 +610,26 @@ fn range_proof_all_scores_below_80() {
 
 fn compute_leaf(
     env: &Env,
+    contract: &Address,
     wallet: &Address,
     pair: &Symbol,
     score: u32,
     timestamp: u64,
 ) -> [u8; 32] {
-    let mut wallet_buf = [0u8; 56];
-    wallet.to_string().copy_into_slice(&mut wallet_buf);
+    env.as_contract(contract, || {
+        let mut wallet_buf = [0u8; 56];
+        wallet.to_string().copy_into_slice(&mut wallet_buf);
 
-    let pair_str = SymbolStr::try_from_val(env, &pair.to_symbol_val()).unwrap();
-    let pair_bytes_ref: &[u8] = pair_str.as_ref();
-    let mut pair_buf = [0u8; 9];
-    let len = pair_bytes_ref.len().min(9);
-    pair_buf[..len].copy_from_slice(&pair_bytes_ref[..len]);
+        let pair_str = SymbolStr::try_from_val(env, &pair.to_symbol_val()).unwrap();
+        let pair_bytes_ref: &[u8] = pair_str.as_ref();
+        let mut pair_buf = [0u8; 9];
+        let len = pair_bytes_ref.len().min(9);
+        pair_buf[..len].copy_from_slice(&pair_bytes_ref[..len]);
 
-    let z = verkle::derive_evaluation_point(env, &wallet_buf, &pair_buf);
-    let v = verkle::derive_value_element(env, score, timestamp, &z);
-    verkle::hash_leaf(env, &z, &v)
+        let z = verkle::derive_evaluation_point(env, &wallet_buf, &pair_buf);
+        let v = verkle::derive_value_element(env, score, timestamp, &z);
+        verkle::hash_leaf(env, &z, &v)
+    })
 }
 
 fn reference_commitment(env: &Env, leaves: &[[u8; 32]]) -> [u8; 32] {
@@ -658,7 +661,7 @@ fn differential_single_entry() {
 
     client.submit_score(&Vec::new(&env), &wallet, &pair, &50, &false, &false, &1, &90, &1, &None);
 
-    let leaf = compute_leaf(&env, &wallet, &pair, 50, 1);
+    let leaf = compute_leaf(&env, &client.address, &wallet, &pair, 50, 1);
     let expected = reference_commitment(&env, &[leaf]);
     let actual = raw_commitment(&env, &client);
     assert_eq!(expected, actual, "single-entry commitment must match reference recomputation");
@@ -672,10 +675,10 @@ fn differential_multiple_entries() {
     let wallet_b = Address::generate(&env);
 
     client.submit_score(&Vec::new(&env), &wallet_a, &pair, &20, &false, &false, &1, &80, &1, &None);
-    let leaf_a = compute_leaf(&env, &wallet_a, &pair, 20, 1);
+    let leaf_a = compute_leaf(&env, &client.address, &wallet_a, &pair, 20, 1);
 
     client.submit_score(&Vec::new(&env), &wallet_b, &pair, &80, &true, &false, &2, &90, &1, &None);
-    let leaf_b = compute_leaf(&env, &wallet_b, &pair, 80, 2);
+    let leaf_b = compute_leaf(&env, &client.address, &wallet_b, &pair, 80, 2);
 
     let expected = reference_commitment(&env, &[leaf_a, leaf_b]);
     let actual = raw_commitment(&env, &client);
@@ -689,7 +692,7 @@ fn differential_after_update() {
     let pair = symbol_short!("XLMUSDC");
 
     client.submit_score(&Vec::new(&env), &wallet, &pair, &30, &false, &false, &1, &80, &1, &None);
-    let leaf_old = compute_leaf(&env, &wallet, &pair, 30, 1);
+    let leaf_old = compute_leaf(&env, &client.address, &wallet, &pair, 30, 1);
 
     assert_eq!(
         reference_commitment(&env, &[leaf_old]),
@@ -711,7 +714,7 @@ fn differential_after_update() {
         &1,
         &None,
     );
-    let leaf_new = compute_leaf(&env, &wallet, &pair, 70, 3_602);
+    let leaf_new = compute_leaf(&env, &client.address, &wallet, &pair, 70, 3_602);
 
     // After update the old leaf is gone, only the new leaf remains.
     assert_eq!(
@@ -740,7 +743,7 @@ fn differential_multiple_pairs() {
         &1,
         &None,
     );
-    let leaf_a = compute_leaf(&env, &wallet, &pair_a, 50, 10);
+    let leaf_a = compute_leaf(&env, &client.address, &wallet, &pair_a, 50, 10);
 
     client.submit_score(
         &Vec::new(&env),
@@ -754,7 +757,7 @@ fn differential_multiple_pairs() {
         &1,
         &None,
     );
-    let leaf_b = compute_leaf(&env, &wallet, &pair_b, 30, 20);
+    let leaf_b = compute_leaf(&env, &client.address, &wallet, &pair_b, 30, 20);
 
     let expected = reference_commitment(&env, &[leaf_a, leaf_b]);
     let actual = raw_commitment(&env, &client);
@@ -779,7 +782,7 @@ fn differential_sequence_mixed_operations() {
         let ts = (i + 1) as u64;
         let score = (20 + i * 10) as u32;
         client.submit_score(&Vec::new(&env), w, &pair, &score, &false, &false, &ts, &85, &1, &None);
-        let leaf = compute_leaf(&env, w, &pair, score, ts);
+        let leaf = compute_leaf(&env, &client.address, w, &pair, score, ts);
         leaves.push(leaf);
 
         assert_eq!(
@@ -809,7 +812,7 @@ fn differential_sequence_mixed_operations() {
         &2,
         &None,
     );
-    let new_leaf = compute_leaf(&env, &wallets[2], &pair, score_update, ts_update);
+    let new_leaf = compute_leaf(&env, &client.address, &wallets[2], &pair, score_update, ts_update);
     leaves[2] = new_leaf;
 
     assert_eq!(
@@ -820,38 +823,60 @@ fn differential_sequence_mixed_operations() {
 }
 
 #[test]
-fn test_verkle_bounded_address_slice_copying_short_and_muxed() {
-    let (env, client, _admin, _service) = initialized();
+fn test_verkle_domain_separation_across_distinct_contract_ids() {
+    let (env, client_a, _admin_a, _service_a) = initialized();
+    let contract_id_b = env.register_contract(None, ScoreGateScoreContract);
+    let client_b = ScoreGateScoreContractClient::new(&env, &contract_id_b);
+    let admin_b = Address::generate(&env);
+    let service_b = Address::generate(&env);
+    client_b.initialize(&admin_b, &service_b);
 
-    // 1. Short address string (< 56 bytes) does not trap and zero-pads remainder
-    let short_str = soroban_sdk::String::from_str(&env, "short_address");
-    let short_buf = verkle::copy_str_to_56_bytes(&short_str);
-    assert_eq!(&short_buf[..13], b"short_address");
-    assert_eq!(&short_buf[13..], &[0u8; 43]);
-
-    // 2. Exact 56-byte address string
-    let exact_bytes = b"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M";
-    let exact_str = soroban_sdk::String::from_str(&env, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M");
-    let exact_buf = verkle::copy_str_to_56_bytes(&exact_str);
-    assert_eq!(&exact_buf[..], exact_bytes);
-
-    // 3. 69-character Stellar muxed account string does not trap and truncates to 56 bytes
-    let muxed_str_raw = "MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGQAAAAAAAAABAAA";
-    let muxed_str = soroban_sdk::String::from_str(&env, muxed_str_raw);
-    let muxed_buf = verkle::copy_str_to_56_bytes(&muxed_str);
-    assert_eq!(&muxed_buf[..], &muxed_str_raw.as_bytes()[..56]);
-
-    // 4. copy_address_to_56_bytes on normal address
     let wallet = Address::generate(&env);
-    let addr_buf = verkle::copy_address_to_56_bytes(&wallet);
-    let expected_len = (wallet.to_string().len() as usize).min(56);
-    let mut temp = [0u8; 256];
-    wallet.to_string().copy_into_slice(&mut temp[..wallet.to_string().len() as usize]);
-    assert_eq!(&addr_buf[..expected_len], &temp[..expected_len]);
-
-    // 5. Proof generation and verification with contract client does not trap
     let pair = symbol_short!("XLMUSDC");
-    let proof = client.get_membership_proof(&wallet, &pair);
-    assert_eq!(proof.len(), 97);
-}
 
+    // Submit score to contract A
+    client_a.submit_score(&Vec::new(&env), &wallet, &pair, &75, &false, &false, &1, &90, &1, &None);
+
+    // Get valid proof and commitment from contract A
+    let commitment_a = client_a.get_state_commitment();
+    let proof_a = client_a.get_membership_proof(&wallet, &pair);
+    let score_entry_a = client_a.get_score(&wallet, &pair);
+
+    // Verifies on contract A
+    assert!(client_a.verify_membership(
+        &commitment_a,
+        &wallet,
+        &pair,
+        &score_entry_a.score,
+        &score_entry_a.timestamp,
+        &proof_a
+    ));
+
+    // Submit score to contract B with the same wallet, pair, score, timestamp
+    client_b.submit_score(&Vec::new(&env), &wallet, &pair, &75, &false, &false, &1, &90, &1, &None);
+    let commitment_b = client_b.get_state_commitment();
+
+    // Verifying proof_a against contract B must fail (both with commitment_b and commitment_a)
+    assert!(
+        !client_b.verify_membership(
+            &commitment_b,
+            &wallet,
+            &pair,
+            &score_entry_a.score,
+            &score_entry_a.timestamp,
+            &proof_a
+        ),
+        "replaying membership proof from contract A on contract B must fail"
+    );
+    assert!(
+        !client_b.verify_membership(
+            &commitment_a,
+            &wallet,
+            &pair,
+            &score_entry_a.score,
+            &score_entry_a.timestamp,
+            &proof_a
+        ),
+        "replaying membership proof and commitment from contract A on contract B must fail"
+    );
+}

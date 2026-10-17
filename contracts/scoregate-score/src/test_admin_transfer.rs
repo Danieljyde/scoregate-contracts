@@ -112,3 +112,13 @@ fn test_transfer_admin_overwrites_previous_pending() {
     client.accept_admin();
     assert_eq!(client.get_admin(), candidate_b);
 }
+
+// ── Reject transfer to self (Invariant #14) ───────────────────────────────────
+
+#[test]
+fn test_transfer_admin_to_self_fails() {
+    let (env, client, admin) = setup();
+    let result = client.try_transfer_admin(&Vec::new(&env), &admin);
+    assert_eq!(result, Err(Ok(Error::InvalidArgument)));
+    assert!(!client.has_pending_admin_transfer());
+}

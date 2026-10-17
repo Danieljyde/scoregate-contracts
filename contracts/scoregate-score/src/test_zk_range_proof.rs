@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 extern crate std;
 
 use crate::{
@@ -666,3 +667,44 @@ fn test_verify_score_range_proof_tampered_fs_challenge() {
     );
     assert!(!result);
 }
+
+#[test]
+fn test_verify_score_range_proof_bypassed_guards() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ScoreGateScoreContract);
+    let client = ScoreGateScoreContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let service = Address::generate(&env);
+    client.initialize(&admin, &service);
+
+    let wallet = Address::generate(&env);
+    let pair = Symbol::new(&env, "XLM_USDC");
+    let commitment = BytesN::from_array(&env, &[1u8; 32]);
+    let proof = Bytes::new(&env);
+    let threshold = 50u32;
+    let admin_signers = soroban_sdk::Vec::new(&env);
+
+    // 1. Contract paused -> returns false immediately
+    client.pause(&admin_signers);
+    assert!(!client.verify_score_range_proof(&wallet, &pair, &commitment, &proof, &threshold));
+    client.unpause(&admin_signers);
+
+    // 2. Asset pair paused -> returns false immediately
+    client.set_pair_paused(&pair, &true);
+    assert!(!client.verify_score_range_proof(&wallet, &pair, &commitment, &proof, &threshold));
+    client.set_pair_paused(&pair, &false);
+
+    // 3. Contract emergency frozen -> returns false immediately
+    client.freeze_contract(&admin_signers);
+    assert!(!client.verify_score_range_proof(&wallet, &pair, &commitment, &proof, &threshold));
+    client.unfreeze_contract(&admin_signers);
+
+    // 4. Wallet embargoed -> returns false immediately
+    client.set_score_embargo(&wallet, &None);
+    assert!(!client.verify_score_range_proof(&wallet, &pair, &commitment, &proof, &threshold));
+    client.lift_score_embargo(&wallet);
+}
+

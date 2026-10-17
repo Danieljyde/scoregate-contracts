@@ -91,3 +91,51 @@ fn test_propose_while_pending_rejected() {
     assert_eq!(client.get_risk_threshold(), 80);
     assert_eq!(client.get_cooldown(), 7_200);
 }
+
+#[test]
+fn test_veto_policy_bundle_cancels_pending_and_emits_event() {
+    use soroban_sdk::{symbol_short, testutils::Events, Symbol, TryFromVal};
+
+    let (env, client, _admin, _service) = setup();
+    let signers = Vec::new(&env);
+
+    client.propose_policy_bundle(&signers, &80, &7_200);
+
+    env.ledger().with_mut(|l| l.timestamp = 42_000);
+    let bundle_id = symbol_short!("pol_bdl");
+    client.veto_policy_bundle(&signers, &bundle_id);
+
+    // Event emitted with bundle_id and timestamp.
+    let veto_events: std::vec::Vec<_> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            e.1.get(0).and_then(|v| Symbol::try_from_val(&env, &v).ok())
+                == Some(symbol_short!("pbdl_veto"))
+        })
+        .collect();
+    assert_eq!(veto_events.len(), 1);
+    let decoded: (Symbol, u64) = TryFromVal::try_from_val(&env, &veto_events[0].2).unwrap();
+    assert_eq!(decoded, (bundle_id, 42_000u64));
+
+    // Subsequent apply_policy_bundle fails with NoPendingUpgrade even after timelock.
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    assert_eq!(client.try_apply_policy_bundle(), Err(Ok(Error::NoPendingUpgrade)));
+    assert_eq!(client.get_risk_threshold(), 75);
+    assert_eq!(client.get_cooldown(), 3_600);
+}
+
+#[test]
+fn test_veto_policy_bundle_with_nothing_pending_fails() {
+    use soroban_sdk::symbol_short;
+
+    let (env, client, _admin, _service) = setup();
+    let signers = Vec::new(&env);
+    let bundle_id = symbol_short!("pol_bdl");
+
+    assert_eq!(
+        client.try_veto_policy_bundle(&signers, &bundle_id),
+        Err(Ok(Error::NoPendingUpgrade))
+    );
+}
