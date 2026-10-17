@@ -2160,8 +2160,7 @@ impl ScoreGateScoreContract {
             return Bytes::new(&env);
         }
         // Derive the evaluation point z for this key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(&wallet);
 
         let pair_str = match SymbolStr::try_from_val(&env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
@@ -2284,8 +2283,7 @@ impl ScoreGateScoreContract {
         };
 
         // Recompute the evaluation point from the supplied key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(&wallet);
         let pair_str = match SymbolStr::try_from_val(&env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
             Err(_) => return false,
@@ -7630,6 +7628,11 @@ impl ScoreGateScoreContract {
         storage::get_pending_parameter_proposal_ids(&env)
     }
 
+    /// Returns the IDs of proposals tracked in the historical proposal index (capped at MAX_PARAMETER_PROPOSAL_HISTORY).
+    pub fn get_parameter_proposal_index(env: Env) -> Vec<u64> {
+        storage::get_parameter_proposal_index(&env)
+    }
+
     /// Clean up expired parameter change proposals that have been expired for at least 48 hours.
     /// Admin only. Idempotent; safe to call repeatedly.
     /// Returns the number of proposals deleted.
@@ -12189,11 +12192,8 @@ impl ScoreGateScoreContract {
         let mut pair_buf = [0u8; 9];
         pair_buf[..pair_bytes.len()].copy_from_slice(pair_bytes);
 
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
-
-        let mut contract_buf = [0u8; 56];
-        env.current_contract_address().to_string().copy_into_slice(&mut contract_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(wallet);
+        let contract_buf = verkle::copy_address_to_56_bytes(&env.current_contract_address());
 
         let mut preimage = Bytes::new(env);
         preimage.extend_from_array(&wallet_buf);
@@ -13404,8 +13404,7 @@ impl ScoreGateScoreContract {
         risk_score: &RiskScore,
     ) {
         // Derive z (evaluation point) for this key.
-        let mut wallet_buf = [0u8; 56];
-        wallet.to_string().copy_into_slice(&mut wallet_buf);
+        let wallet_buf = verkle::copy_address_to_56_bytes(wallet);
 
         let pair_str = match SymbolStr::try_from_val(env, &asset_pair.to_symbol_val()) {
             Ok(s) => s,
