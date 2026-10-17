@@ -1,4 +1,4 @@
-﻿#![cfg(test)]
+#![cfg(test)]
 
 //! Tests for `query_risk_gate_with_confidence` and the admin-configurable
 //! global minimum confidence floor (`set_global_min_confidence` /
@@ -10,8 +10,8 @@
 
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
-    Address, Env, Vec,
+    testutils::{Address as _, Events as _, Ledger as _},
+    Address, Env, TryFromVal as _, Vec,
 };
 
 use crate::{ScoreGateScoreContract, ScoreGateScoreContractClient};
@@ -364,4 +364,62 @@ fn test_query_risk_gate_delegates_to_confidence_gate() {
              → query_risk_gate={gate}, query_risk_gate_with_confidence(0)={cgate}"
         );
     }
+}
+
+// ── Adaptive Threshold Validation & Audit Events (#186) ──────────────────────
+
+#[test]
+fn test_enable_adaptive_threshold_rejects_max_value_above_100() {
+    let (env, client, _admin, _service) = setup();
+    let res = client.try_enable_adaptive_threshold(&Vec::new(&env), &90, &50, &101);
+    assert_eq!(res, Err(Ok(crate::Error::InvalidThreshold)));
+}
+
+#[test]
+fn test_enable_adaptive_threshold_accepts_max_value_100_and_emits_event() {
+    let (env, client, _admin, _service) = setup();
+    let res = client.try_enable_adaptive_threshold(&Vec::new(&env), &90, &50, &100);
+    assert!(res.is_ok());
+
+    let config = client.get_adaptive_threshold_config();
+    assert!(config.enabled);
+    assert_eq!(config.target_percentile, 90);
+    assert_eq!(config.min_value, 50);
+    assert_eq!(config.max_value, 100);
+
+    // Verify audit event emission
+    let events = env.events().all();
+    let mut found = false;
+    for i in 0..events.len() {
+        let e = events.get(i).unwrap();
+        let topic_tuple: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
+        if topic_tuple.len() > 0 {
+            if let Ok(sym) = soroban_sdk::Symbol::try_from_val(&env, &topic_tuple.get(0).unwrap()) {
+                if sym == symbol_short!("at_enab") {
+                    let data: (u32, u32, u32) = soroban_sdk::TryFromVal::try_from_val(&env, &e.2).unwrap();
+                    assert_eq!(data, (90, 50, 100));
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(found, "adaptive_threshold_enabled event must be emitted");
+}
+
+#[test]
+fn test_enable_adaptive_threshold_rejects_min_greater_than_max() {
+    let (env, client, _admin, _service) = setup();
+    let res = client.try_enable_adaptive_threshold(&Vec::new(&env), &90, &80, &70);
+    assert_eq!(res, Err(Ok(crate::Error::InvalidThreshold)));
+}
+
+#[test]
+fn test_enable_adaptive_threshold_rejects_invalid_percentile() {
+    let (env, client, _admin, _service) = setup();
+    let res_low = client.try_enable_adaptive_threshold(&Vec::new(&env), &49, &50, &90);
+    assert_eq!(res_low, Err(Ok(crate::Error::InvalidPercentile)));
+
+    let res_high = client.try_enable_adaptive_threshold(&Vec::new(&env), &100, &50, &90);
+    assert_eq!(res_high, Err(Ok(crate::Error::InvalidPercentile)));
 }

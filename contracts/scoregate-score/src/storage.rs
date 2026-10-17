@@ -1233,6 +1233,7 @@ pub fn clear_score(env: &Env, wallet: &Address, asset_pair: &Symbol) {
         .remove(&DataKeyD::TokenBucket(wallet.clone(), asset_pair.clone()));
     remove_pair_for_wallet(env, wallet, asset_pair);
     remove_score_entry(env, wallet, asset_pair);
+    clear_counterparty_links(env, wallet, asset_pair);
 }
 
 pub fn get_deletion_approval_policy(env: &Env) -> DeletionApprovalPolicy {
@@ -1726,6 +1727,26 @@ pub fn remove_counterparty_link(
     }
 
     Ok(())
+}
+
+pub fn clear_counterparty_links(env: &Env, wallet: &Address, asset_pair: &Symbol) {
+    let counterparties = get_counterparties(env, wallet, asset_pair);
+    for i in 0..counterparties.len() {
+        let cp = counterparties.get(i).unwrap();
+        let mut cp_links = get_counterparties(env, &cp, asset_pair);
+        if let Some(pos) = cp_links.first_index_of(wallet) {
+            cp_links.remove(pos);
+            let key_cp = DataKey::Counterparties(cp.clone(), asset_pair.clone());
+            if cp_links.is_empty() {
+                env.storage().persistent().remove(&key_cp);
+            } else {
+                env.storage().persistent().set(&key_cp, &cp_links);
+                env.storage().persistent().extend_ttl(&key_cp, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
+            }
+        }
+    }
+    let key = DataKey::Counterparties(wallet.clone(), asset_pair.clone());
+    env.storage().persistent().remove(&key);
 }
 
 pub fn get_contagion_depth(env: &Env, wallet: &Address, asset_pair: &Symbol) -> u32 {
@@ -3263,33 +3284,6 @@ pub fn get_signer_state_record(env: &Env, signer: &Address) -> Option<SignerStat
     env.storage().persistent().get(&DataKeyD::SignerState(signer.clone()))
 }
 
-/// Grace period for signer state changes, defaulting to 1 hour.
-///
-/// Restored after the `ledgerlens-score` -> `scoregate-score` package rename
-/// dropped it, which left `governance_helpers.rs` calling a function that did not
-/// exist and broke the build.
-pub fn get_signer_grace_period_secs(env: &Env) -> u64 {
-    env.storage()
-        .instance()
-        .get(&DataKeyD::SignerGracePeriodSecs)
-        .unwrap_or(crate::constants::DEFAULT_SIGNER_GRACE_PERIOD_SECS)
-}
-
-pub fn set_signer_grace_period_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKeyD::SignerGracePeriodSecs, &secs);
-}
-
-/// Signer addresses eligible to sign, in priority order.
-pub fn get_active_signer_index(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&DataKeyD::ActiveSignerIndex)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-pub fn set_active_signer_index(env: &Env, signers: &Vec<Address>) {
-    env.storage().instance().set(&DataKeyD::ActiveSignerIndex, signers);
-}
 
 // ── #631: Emergency freeze / thaw ──────────────────────────────────────────
 
