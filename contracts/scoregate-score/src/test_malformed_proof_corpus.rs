@@ -21,7 +21,7 @@
 
 extern crate std;
 
-use soroban_sdk::{Bytes, BytesN, Env};
+use soroban_sdk::{testutils::Address as _, Bytes, BytesN, Env};
 
 use crate::verkle::{
     bytes48_to_commitment, commitment_to_bytes48, compute_membership_witness,
@@ -367,3 +367,55 @@ fn test_verify_proof_nonmembership_semantics() {
         "membership witness accepted for a non-member payload"
     );
 }
+
+// ── 6. Fuzzing & Contract Resilience against Malformed Vectors (issue #194) ───
+
+#[test]
+fn test_fuzz_random_byte_vectors_decompress_and_bulletproof() {
+    let env = env();
+    let mut seed = [0x5au8; 32];
+    for i in 0..100 {
+        seed[0] = seed[0].wrapping_add(i as u8);
+        let digest = env.crypto().sha256(&Bytes::from_array(&env, &seed));
+        let arr = digest.to_array();
+        let bytes_32 = BytesN::from_array(&env, &arr);
+        // decompress_pt_32 must never trap or panic on random bytes
+        let _ = decompress_pt_32(&env, &bytes_32);
+
+        // Test Bulletproof::from_bytes with 800-byte pseudo-random buffer
+        let mut proof_buf = [0u8; 800];
+        for chunk in 0..25 {
+            proof_buf[chunk * 32..(chunk + 1) * 32].copy_from_slice(&arr);
+        }
+        proof_buf[0] ^= i as u8;
+        let bytes_800 = Bytes::from_array(&env, &proof_buf);
+        let _ = Bulletproof::from_bytes(&bytes_800);
+    }
+}
+
+#[test]
+fn test_verify_score_range_proof_malformed_inputs_return_false() {
+    let env = env();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, crate::ScoreGateScoreContract);
+    let client = crate::ScoreGateScoreContractClient::new(&env, &contract_id);
+    let admin = soroban_sdk::Address::generate(&env);
+    let service = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &service);
+
+    let wallet = soroban_sdk::Address::generate(&env);
+    let pair = soroban_sdk::Symbol::new(&env, "XLM_USDC");
+
+    let malformed_commitment = BytesN::from_array(&env, &[0xffu8; 32]);
+    let malformed_proof = Bytes::from_array(&env, &[0xfeu8; 800]);
+
+    let res = client.verify_score_range_proof(
+        &wallet,
+        &pair,
+        &malformed_commitment,
+        &malformed_proof,
+        &50,
+    );
+    assert!(!res, "verify_score_range_proof should return false for malformed inputs");
+}
+

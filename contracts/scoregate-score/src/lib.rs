@@ -79,8 +79,11 @@ mod test_pubkey_canonicalization;
 // #[cfg(test)]
 // mod test_multisig_service;
 
-// #[cfg(test)]
-// mod test_attestation;
+#[cfg(test)]
+mod test_attestation;
+
+#[cfg(test)]
+mod test_zk_range_proof;
 
 #[cfg(test)]
 mod test_attestation_domain_compat;
@@ -592,7 +595,17 @@ impl ScoreGateScoreContract {
                     if current_nonce != att.nonce {
                         return Err(Error::InvalidAttestation);
                     }
-                    let next_nonce = att.nonce.checked_add(1).ok_or(Error::InvalidAttestation)?;
+                    if current_nonce == u64::MAX {
+                        return Err(Error::NonceExhausted);
+                    }
+                    let next_nonce = match att.nonce.checked_add(1) {
+                        Some(n) => n,
+                        None => return Err(Error::NonceExhausted),
+                    };
+                    if next_nonce >= constants::NONCE_EXHAUSTION_WARNING_THRESHOLD {
+                        let remaining = u64::MAX - next_nonce;
+                        events::signer_nonce_near_exhaustion(&env, &service, next_nonce, remaining);
+                    }
                     storage::set_signer_nonce(&env, &service, next_nonce);
                 }
             }
@@ -2292,7 +2305,7 @@ impl ScoreGateScoreContract {
                 return false;
             }
             // Verify the witness against the commitment, z, and v.
-            verkle::verify_proof(&env, &commit_inner, &z_proof, &v_proof, &witness)
+            verkle::verify_proof_typed(&env, true, &commit_inner, &z_proof, &v_proof, &witness)
         } else {
             // Non-membership: v must be the sentinel, score argument must be 0.
             if score != 0 {
@@ -2301,7 +2314,7 @@ impl ScoreGateScoreContract {
             if v_proof != verkle::NON_MEMBER_SENTINEL {
                 return false; // proof claims non-membership but v != sentinel
             }
-            verkle::verify_proof(&env, &commit_inner, &z_proof, &v_proof, &witness)
+            verkle::verify_proof_typed(&env, false, &commit_inner, &z_proof, &v_proof, &witness)
         }
     }
 

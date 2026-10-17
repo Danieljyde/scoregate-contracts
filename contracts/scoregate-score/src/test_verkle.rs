@@ -360,6 +360,54 @@ fn verify_membership_with_nonzero_score_rejects_nonmember_proof() {
 }
 
 #[test]
+fn test_score_zero_nonmember_sentinel_non_collision() {
+    let (env, client, admin, service) = initialized();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLMUSDC");
+
+    // Submit legitimate live score of 0
+    client.submit_score(&Vec::new(&env), &wallet, &pair, &0, &false, &false, &1, &90, &1, &None);
+
+    let commitment = client.get_state_commitment();
+    let member_proof = client.get_membership_proof(&wallet, &pair);
+    let member_arr = proof_to_array(&member_proof);
+
+    // 1. Proof type must be member (0x01), not non-member (0x02)
+    assert_eq!(member_arr[0], 0x01, "score 0 must have member proof type byte");
+
+    // 2. Value element v must NOT be NON_MEMBER_SENTINEL ([0u8; 32])
+    assert_ne!(
+        &member_arr[33..65],
+        &verkle::NON_MEMBER_SENTINEL,
+        "score 0 value element must never collide with NON_MEMBER_SENTINEL"
+    );
+
+    // 3. Score 0 membership proof cannot be validated as non-membership proof
+    let mut forged_nonmember = member_arr;
+    forged_nonmember[0] = 0x02; // tamper type byte to non-member
+    let forged_nonmember_bytes = Bytes::from_array(&env, &forged_nonmember);
+    assert!(
+        !client.verify_membership(&commitment, &wallet, &pair, &0, &1, &forged_nonmember_bytes),
+        "membership proof for score 0 cannot be validated as non-membership"
+    );
+
+    // 4. Non-membership proof for an unscored wallet cannot be passed off as valid score 0 opening
+    let unscored_wallet = Address::generate(&env);
+    let nonmember_proof = client.get_membership_proof(&unscored_wallet, &pair);
+    let nonmember_arr = proof_to_array(&nonmember_proof);
+    assert_eq!(nonmember_arr[0], 0x02, "unscored wallet must have non-member proof type byte");
+
+    // Attempting to present nonmember proof with a member type byte for score 0 opening fails
+    let mut forged_member = nonmember_arr;
+    forged_member[0] = 0x01; // tamper type to member
+    let forged_member_bytes = Bytes::from_array(&env, &forged_member);
+    assert!(
+        !client.verify_membership(&commitment, &unscored_wallet, &pair, &0, &1, &forged_member_bytes),
+        "non-membership proof cannot be passed off as valid score 0 opening"
+    );
+}
+
+#[test]
 fn nonmember_proof_fails_for_different_wallet() {
     let (env, client, admin, service) = initialized();
 

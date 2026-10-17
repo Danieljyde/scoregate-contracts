@@ -11,10 +11,12 @@
 
 use k256::ecdsa::SigningKey;
 use soroban_sdk::{
-    symbol_short, testutils::Address as _, Address, Bytes, BytesN, Env, Symbol, Vec,
+    symbol_short, testutils::{Address as _, Events as _}, xdr::ToXdr, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec,
 };
 
 use crate::{Error, ScoreGateScoreContract, ScoreGateScoreContractClient, ScoreAttestation, ScoreAttestationInput, MaybeScoreAttestation, MaybeThresholdAttestation};
+
+const TEST_CONTRACT_VERSION: u32 = crate::constants::CONTRACT_VERSION;
 
 fn setup<'a>() -> (Env, ScoreGateScoreContractClient<'a>, Address, Address) {
     let env = Env::default();
@@ -90,8 +92,8 @@ fn commitment(
 fn get_contract_id_bytes(env: &Env, contract_address: &Address) -> BytesN<32> {
     let xdr = contract_address.to_xdr(env);
     let mut bytes = [0u8; 32];
-    if xdr.len() >= 32 {
-        bytes.copy_from_slice(&xdr.as_ref()[..32]);
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = xdr.get(i as u32).unwrap_or(0);
     }
     BytesN::from_array(env, &bytes)
 }
@@ -223,8 +225,8 @@ fn test_submit_score_with_valid_attestation_compressed_pubkey_succeeds() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, true, false, 1, 90, 1, &contract_id, 3);
-    let attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, true, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -251,8 +253,8 @@ fn test_submit_score_with_valid_attestation_uncompressed_pubkey_succeeds() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, true, 1, 90, 1, &contract_id, 3);
-    let attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, true, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -279,8 +281,8 @@ fn test_submit_score_with_attestation_for_different_payload_rejected() {
     let pair = symbol_short!("XLM_USDC");
     // Attestation is valid, but for score 42 — the call below submits 43.
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -306,8 +308,8 @@ fn test_submit_score_with_tampered_commitment_field_rejected() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let mut attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let mut attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
     // Corrupt the (otherwise untrusted) commitment field directly; the
     // signature still matches the *original* digest, but the contract
     // recomputes the commitment independently and must reject the mismatch.
@@ -339,9 +341,9 @@ fn test_submit_score_signed_by_wrong_key_rejected() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
     // Signed by a different key than the one registered.
-    let attestation = attest(&env, &signing_key(2), digest, contract_id, 3);
+    let attestation = attest(&env, &signing_key(2), digest, contract_id, TEST_CONTRACT_VERSION);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -367,8 +369,8 @@ fn test_submit_score_with_out_of_range_recovery_id_rejected() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let mut attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let mut attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
     let mut sig = attestation.signature.to_array();
     sig[64] = 2; // only 0/1 are valid recovery ids
     attestation.signature = BytesN::from_array(&env, &sig);
@@ -425,8 +427,8 @@ fn test_submit_score_with_correct_contract_id_and_version_succeeds() {
     let wallet = Address::generate(&env);
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
 
     let result = client.try_submit_score(
         &Vec::new(&env),
@@ -455,8 +457,8 @@ fn test_submit_score_with_wrong_contract_id_rejected() {
     let mut wrong_contract_id = [0u8; 32];
     wrong_contract_id[0] = contract_id.to_array()[0] ^ 0xFF;
     let wrong_contract_id_bytes = BytesN::from_array(&env, &wrong_contract_id);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let mut attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let mut attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
     attestation.contract_id = wrong_contract_id_bytes;
 
     let result = client.try_submit_score(
@@ -484,8 +486,8 @@ fn test_submit_score_with_zero_contract_id_rejected() {
     let pair = symbol_short!("XLM_USDC");
     let contract_id = get_contract_id_bytes(&env, &client.address);
     let zero_contract_id = BytesN::from_array(&env, &[0u8; 32]);
-    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, 3);
-    let mut attestation = attest(&env, &key, digest, contract_id, 3);
+    let digest = commitment(&env, &client.address, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id, TEST_CONTRACT_VERSION);
+    let mut attestation = attest(&env, &key, digest, contract_id, TEST_CONTRACT_VERSION);
     attestation.contract_id = zero_contract_id;
 
     let result = client.try_submit_score(
@@ -542,8 +544,8 @@ fn test_attestation_signed_for_one_instance_rejected_on_another_instance() {
 
     // Attestation signed for contract A's real digest (its own address is
     // baked into the preimage via `env.current_contract_address()`).
-    let digest_a = commitment(&env, &contract_a, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_a_id_bytes, 3);
-    let attestation = attest(&env, &key, digest_a, contract_a_id_bytes, 3);
+    let digest_a = commitment(&env, &contract_a, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_a_id_bytes, TEST_CONTRACT_VERSION);
+    let attestation = attest(&env, &key, digest_a, contract_a_id_bytes, TEST_CONTRACT_VERSION);
 
     // Sanity check: it is accepted on the instance it was actually signed for.
     let accepted_on_a = client_a.try_submit_score(
@@ -578,3 +580,114 @@ fn test_attestation_signed_for_one_instance_rejected_on_another_instance() {
     );
     assert_eq!(replayed_on_b, Err(Ok(Error::InvalidAttestation)));
 }
+
+// ── Nonce exhaustion tests (issue #196) ───────────────────────────────────────
+
+fn attest_with_nonce(
+    env: &Env,
+    key: &SigningKey,
+    digest: [u8; 32],
+    contract_id: BytesN<32>,
+    contract_version: u32,
+    nonce: u64,
+) -> ScoreAttestation {
+    let Ok((sig, recid)) = key.sign_prehash_recoverable(&digest) else { panic!("sign failed") };
+    let mut sig_bytes = [0u8; 65];
+    sig_bytes[..64].copy_from_slice(&sig.to_bytes());
+    sig_bytes[64] = recid.to_byte();
+    ScoreAttestation {
+        commitment: BytesN::from_array(env, &digest),
+        signature: BytesN::from_array(env, &sig_bytes),
+        contract_id,
+        contract_version,
+        nonce,
+    }
+}
+
+#[test]
+fn test_nonce_near_exhaustion_emits_warning_event() {
+    let (env, client, _admin, service) = initialized();
+    let key = signing_key(1);
+    let pubkey = pubkey_bytes(&env, &key, true);
+    client.set_service_pubkey(&Vec::new(&env), &pubkey);
+
+    let contract_id = client.address.clone();
+    let contract_id_bytes = get_contract_id_bytes(&env, &contract_id);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    // Set nonce near maximum capacity
+    let near_max_nonce = u64::MAX - 5;
+    env.as_contract(&contract_id, || {
+        crate::storage::set_signer_nonce(&env, &service, near_max_nonce);
+    });
+
+    let digest = commitment(&env, &contract_id, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id_bytes, TEST_CONTRACT_VERSION);
+    let att = attest_with_nonce(&env, &key, digest, contract_id_bytes, TEST_CONTRACT_VERSION, near_max_nonce);
+
+    let res = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &42,
+        &false,
+        &false,
+        &1,
+        &90,
+        &1,
+        &Some(ScoreAttestationInput {
+            attestation: MaybeScoreAttestation::Some(att),
+            threshold_attestation: MaybeThresholdAttestation::None,
+            commitment: None,
+        }),
+    );
+    assert!(res.is_ok());
+
+    // Verify that the nonce_wrn event was emitted
+    let events = env.events().all();
+    let warn_topic = (symbol_short!("nonce_wrn"), 1u32, service.clone());
+    let found = events.iter().any(|(addr, topics, _data)| {
+        addr == contract_id && topics == warn_topic.into_val(&env)
+    });
+    assert!(found, "signer_nonce_near_exhaustion event must be emitted when nonce approaches capacity");
+}
+
+#[test]
+fn test_nonce_overflow_returns_explicit_nonce_exhausted_error() {
+    let (env, client, _admin, service) = initialized();
+    let key = signing_key(1);
+    let pubkey = pubkey_bytes(&env, &key, true);
+    client.set_service_pubkey(&Vec::new(&env), &pubkey);
+
+    let contract_id = client.address.clone();
+    let contract_id_bytes = get_contract_id_bytes(&env, &contract_id);
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    // Set nonce to u64::MAX (exhausted)
+    env.as_contract(&contract_id, || {
+        crate::storage::set_signer_nonce(&env, &service, u64::MAX);
+    });
+
+    let digest = commitment(&env, &contract_id, &wallet, &pair, 42, false, false, 1, 90, 1, &contract_id_bytes, TEST_CONTRACT_VERSION);
+    let att = attest_with_nonce(&env, &key, digest, contract_id_bytes, TEST_CONTRACT_VERSION, u64::MAX);
+
+    let res = client.try_submit_score(
+        &Vec::new(&env),
+        &wallet,
+        &pair,
+        &42,
+        &false,
+        &false,
+        &1,
+        &90,
+        &1,
+        &Some(ScoreAttestationInput {
+            attestation: MaybeScoreAttestation::Some(att),
+            threshold_attestation: MaybeThresholdAttestation::None,
+            commitment: None,
+        }),
+    );
+    assert_eq!(res, Err(Ok(Error::NonceExhausted)));
+}
+

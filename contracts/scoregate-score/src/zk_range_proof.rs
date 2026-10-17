@@ -399,8 +399,15 @@ pub fn decompress_pt_32(env: &Env, bytes: &BytesN<32>) -> Option<Pt> {
     }
 
     let x_lsb = (x.0[0] & 1) as u8;
+    if x.is_zero() && sign != 0 {
+        return None;
+    }
     if x_lsb != sign {
         x = Fe::zero().sub(x);
+    }
+
+    if !is_on_curve(x, y, d) {
+        return None;
     }
 
     Some(Pt { x, y })
@@ -422,7 +429,7 @@ impl Pt {
     }
 
     pub fn is_identity(&self) -> bool {
-        self.x.is_zero() && self.y == Fe::one()
+        (self.x.is_zero() && self.y == Fe::one()) || (self.x.is_zero() && self.y.is_zero())
     }
 
     pub fn add(self, other: Self, d: Fe) -> Self {
@@ -432,6 +439,9 @@ impl Pt {
         if other.is_identity() {
             return self;
         }
+        if self.x == other.x.neg() && self.y == other.y {
+            return Self::identity();
+        }
         let x1x2 = self.x.mul(other.x);
         let y1y2 = self.y.mul(other.y);
         let x1y2 = self.x.mul(other.y);
@@ -440,10 +450,16 @@ impl Pt {
 
         let num_x = x1y2.add(y1x2);
         let den_x = Fe::one().add(dx1x2y1y2);
+        if den_x.is_zero() {
+            return Self::identity();
+        }
         let x3 = num_x.mul(den_x.invert());
 
         let num_y = y1y2.add(x1x2);
         let den_y = Fe::one().sub(dx1x2y1y2);
+        if den_y.is_zero() {
+            return Self::identity();
+        }
         let y3 = num_y.mul(den_y.invert());
 
         Pt { x: x3, y: y3 }
@@ -454,6 +470,9 @@ impl Pt {
     }
 
     pub fn mul(self, scalar: Sc, d: Fe) -> Self {
+        if self.is_identity() || scalar.is_zero() {
+            return Self::identity();
+        }
         let mut res = Self::identity();
         let mut temp = self;
         let mut s = scalar;
@@ -494,7 +513,10 @@ fn hash_to_curve(env: &Env, domain: &[u8]) -> Pt {
         let digest = env.crypto().sha256(&Bytes::from_array(env, &input));
         if let Some(point) = decompress_pt_32(env, &BytesN::from_array(env, &digest.to_array())) {
             if !point.is_identity() && is_on_curve(point.x, point.y, d) {
-                return point;
+                let pt = point.mul(Sc::from_u64(8), d);
+                if !pt.is_identity() {
+                    return pt;
+                }
             }
         }
     }
@@ -512,12 +534,12 @@ pub fn get_vector_generators(env: &Env, d: Fe) -> ([Pt; 8], [Pt; 8]) {
     let mut gs = [Pt::identity(); 8];
     let mut hs = [Pt::identity(); 8];
     for i in 0..8 {
-        let mut g_domain = [0u8; 26];
-        g_domain[..22].copy_from_slice(b"ScoreGate Bulletproof G");
-        g_domain[22..26].copy_from_slice(&(i as u32).to_le_bytes());
-        let mut h_domain = [0u8; 26];
-        h_domain[..22].copy_from_slice(b"ScoreGate Bulletproof H");
-        h_domain[22..26].copy_from_slice(&(i as u32).to_le_bytes());
+        let mut g_domain = [0u8; 27];
+        g_domain[..23].copy_from_slice(b"ScoreGate Bulletproof G");
+        g_domain[23..27].copy_from_slice(&(i as u32).to_le_bytes());
+        let mut h_domain = [0u8; 27];
+        h_domain[..23].copy_from_slice(b"ScoreGate Bulletproof H");
+        h_domain[23..27].copy_from_slice(&(i as u32).to_le_bytes());
         gs[i] = hash_to_curve(env, &g_domain);
         hs[i] = hash_to_curve(env, &h_domain);
     }
@@ -607,6 +629,9 @@ impl Bulletproof {
             *offset += 32;
             let x = Fe(x_limbs);
             let y = Fe(y_limbs);
+            if x.ge(&Fe::P) || y.ge(&Fe::P) {
+                return None;
+            }
             let d = Fe::from_u64(121665).neg().mul(Fe::from_u64(121666).invert());
             if is_on_curve(x, y, d) {
                 Some(Pt { x, y })
@@ -625,7 +650,11 @@ impl Bulletproof {
                 limbs[i as usize] = u64::from_le_bytes(b);
             }
             *offset += 32;
-            Some(Sc(limbs))
+            let sc = Sc(limbs);
+            if sc.ge(&Sc::L) {
+                return None;
+            }
+            Some(sc)
         };
 
         let A = read_pt(bytes, &mut offset)?;
