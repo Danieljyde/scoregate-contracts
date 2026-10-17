@@ -1,4 +1,4 @@
-﻿#![cfg(test)]
+#![cfg(test)]
 
 //! Comprehensive tests for the admin fee withdrawal feature:
 //! `set_fee_token`, `get_fee_token`, `set_fee_recipient`, `get_fee_recipient`,
@@ -65,7 +65,7 @@ fn setup_no_token<'a>() -> (Env, ScoreGateScoreContractClient<'a>, Address) {
 #[test]
 fn test_set_fee_token_success() {
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(0);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
     assert_eq!(client.get_fee_token(), Some(token_address));
     let _ = (env,); // suppress unused warning
 }
@@ -77,20 +77,20 @@ fn test_set_fee_token_not_initialized() {
     let contract_id = env.register_contract(None, ScoreGateScoreContract);
     let client = ScoreGateScoreContractClient::new(&env, &contract_id);
     let token = Address::generate(&env);
-    let result = client.try_set_fee_token(&token);
+    let result = client.try_set_fee_token(&Vec::new(&env), &token);
     assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
 
 #[test]
 fn test_set_fee_token_can_be_updated() {
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(0);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let issuer2 = Address::generate(&env);
     let sac2 = env.register_stellar_asset_contract_v2(issuer2);
     let token2 = sac2.address();
 
-    client.set_fee_token(&token2);
+    client.set_fee_token(&Vec::new(&env), &token2);
     assert_eq!(client.get_fee_token(), Some(token2));
 }
 
@@ -149,7 +149,7 @@ fn test_withdraw_fees_success() {
     let withdraw_amount: i128 = 400_000;
 
     let (env, client, _admin, token_address, contract_id) = setup_with_token(contract_balance);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -168,7 +168,7 @@ fn test_withdraw_fees_success() {
 fn test_withdraw_fees_full_balance() {
     let balance: i128 = 500_000;
     let (env, client, _admin, token_address, contract_id) = setup_with_token(balance);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -196,7 +196,7 @@ fn test_withdraw_fees_not_initialized() {
 #[test]
 fn test_withdraw_fees_zero_amount_rejected() {
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
     let recipient = Address::generate(&env);
     let result = client.try_withdraw_fees(&Vec::new(&env), &recipient, &0);
     assert_eq!(result, Err(Ok(Error::InvalidWithdrawalAmount)));
@@ -213,7 +213,7 @@ fn test_withdraw_fees_fee_token_not_set() {
 #[test]
 fn test_withdraw_fees_contract_paused() {
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
     client.pause(&Vec::new(&env));
     let recipient = Address::generate(&env);
     let result = client.try_withdraw_fees(&Vec::new(&env), &recipient, &1000);
@@ -226,7 +226,7 @@ fn test_withdraw_fees_contract_paused() {
 fn test_withdraw_fees_recipient_not_registered() {
     // `set_fee_recipient` has never been called.
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
     let recipient = Address::generate(&env);
     let result = client.try_withdraw_fees(&Vec::new(&env), &recipient, &1000);
     assert_eq!(result, Err(Ok(Error::FeeRecipientNotSet)));
@@ -238,7 +238,7 @@ fn test_withdraw_fees_unregistered_recipient_fails() {
     // different, non-registered address — must be rejected even though the
     // admin authorizes the call.
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let registered_recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &registered_recipient);
@@ -253,7 +253,7 @@ fn test_withdraw_fees_registered_recipient_and_admin_succeeds() {
     // Both the admin and the registered recipient authorize the call (via
     // `mock_all_auths`) — the dual-authorization requirement is satisfied.
     let (env, client, _admin, token_address, contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -273,7 +273,7 @@ fn test_withdraw_fees_admin_alone_fails() {
     // invocation (not the recipient's) so the contract's own dual-auth check
     // is what's under test, not `mock_all_auths` papering over it.
     let (env, client, admin, token_address, _contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -299,7 +299,7 @@ fn test_withdraw_fees_admin_alone_fails() {
 fn test_withdraw_fees_lock_prevents_duplicate() {
     // Directly set the withdrawal lock in storage to simulate a concurrent call.
     let (env, client, _admin, token_address, contract_id) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -319,7 +319,7 @@ fn test_withdrawal_lock_cleared_after_success() {
     // calls are not blocked. Both withdrawals target the single registered
     // recipient, since `withdraw_fees` no longer accepts an arbitrary address.
     let (env, client, _admin, token_address, _contract_id) = setup_with_token(200_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
 
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
@@ -344,7 +344,7 @@ fn test_withdraw_fees_requires_admin_auth() {
     // `test_withdraw_fees_admin_alone_fails`, which uses `mock_auths` to
     // mock only the admin and confirm the recipient side is still enforced.
     let (env, client, _admin, token_address, _) = setup_with_token(100_000);
-    client.set_fee_token(&token_address);
+    client.set_fee_token(&Vec::new(&env), &token_address);
     let recipient = Address::generate(&env);
     client.set_fee_recipient(&Vec::new(&env), &recipient);
     // Should succeed with mocked auth.
@@ -356,5 +356,5 @@ fn test_set_fee_token_requires_admin_auth() {
     // Same rationale as above — verifies no panic with mocked auth.
     let (env, client, _admin, token_address, _) = setup_with_token(0);
     let _ = env;
-    client.set_fee_token(&token_address); // succeeds with mock_all_auths
+    client.set_fee_token(&Vec::new(&env), &token_address); // succeeds with mock_all_auths
 }

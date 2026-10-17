@@ -26,6 +26,7 @@ pub const MAX_BATCH_SIZE: u32 = 20;
 /// turning a read endpoint into a way to make the contract run out of gas.
 pub const MAX_EXPORT_PAGE_SIZE: u32 = 200;
 pub const MAX_ASSET_PAIR_BYTES: u32 = 9;
+pub const MAX_ASSET_PAIR_LEN: u32 = MAX_ASSET_PAIR_BYTES;
 pub const MAX_SCORE_COMMITMENT_BYTES: u32 = 32;
 pub const MAX_DISPUTE_BOND_PREIMAGE_BYTES: u32 = 80;
 pub const MAX_DISPUTE_BOND_SALT_BYTES: u32 = 64;
@@ -118,6 +119,8 @@ pub const EMBARGO_TTL_EXTEND_TO: u32 = 3_110_400;
 pub const MAX_EMBARGOED_WALLETS: u32 = 100;
 pub const DEFAULT_CONSENSUS_THRESHOLD_K: u32 = 2;
 pub const DEFAULT_CONSENSUS_EPSILON: u32 = 5;
+/// Minimum spread required between lower and upper adaptive epsilon bounds (#190).
+pub const MIN_EPSILON_SPREAD: u32 = 5;
 
 // ── Escalation / consecutive breach ──────────────────────────────────────────
 

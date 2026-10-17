@@ -548,7 +548,7 @@ mod tests {
         client.initialize(&admin, &service);
 
         let pair = Symbol::new(&env, "XLM_USDC");
-        client.set_pair_paused(&pair, &true);
+        client.set_pair_paused(&SVec::new(&env), &pair, &true);
 
         let path =
             std::env::temp_dir().join(format!("replay_snapshot_test_{}.ndjson", std::process::id()));

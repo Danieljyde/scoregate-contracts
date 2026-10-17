@@ -32,7 +32,7 @@ fn setup_with_token(initial_balance: i128) -> Setup<'static> {
     if initial_balance > 0 {
         StellarAssetClient::new(&env, &token).mint(&contract, &initial_balance);
     }
-    client.set_fee_token(&token);
+    client.set_fee_token(&Vec::new(&env), &token);
 
     // SAFETY: env is moved into Setup and outlives client.
     let client: ScoreGateScoreContractClient<'static> =

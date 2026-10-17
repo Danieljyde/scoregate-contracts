@@ -535,7 +535,7 @@ fn bench_set_pair_paused(c: &mut Criterion) {
             let env = Env::default();
             let (client, _, _, asset_pair) = setup(&env);
             black_box(measure(&env, || {
-                client.set_pair_paused(&asset_pair, &true);
+                client.set_pair_paused(&Vec::new(&env), &asset_pair, &true);
             }))
         });
     });
