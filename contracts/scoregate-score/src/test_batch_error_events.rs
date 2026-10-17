@@ -53,7 +53,10 @@ fn test_batch_rejection_code_contract_paused() {
         model_version: 1,
     });
 
-    assert_eq!(client.try_submit_scores_batch(&Vec::new(&env), &batch), Err(Ok(Error::ContractPaused)));
+    assert_eq!(
+        client.try_submit_scores_batch(&Vec::new(&env), &batch),
+        Err(Ok(Error::ContractPaused))
+    );
 }
 
 #[test]
@@ -278,4 +281,84 @@ fn test_rejection_does_not_leak_wallet_data() {
     );
     // The wallet address itself is not part of the rejection response
     // in terms of the rejection_code - only the category is returned
+}
+
+#[test]
+fn test_batch_rejection_events_publish_schema_version_and_contents() {
+    use crate::events::{self, EVENT_VERSION};
+    use soroban_sdk::{testutils::Events as _, IntoVal, Symbol};
+
+    let env = Env::default();
+
+    // 1. batch_rejected_contract_paused
+    events::batch_rejected_contract_paused(&env, 5);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_pa"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let count: u32 = data.into_val(&env);
+    assert_eq!(count, 5);
+
+    // 2. batch_rejected_data_quality
+    events::batch_rejected_data_quality(&env, 2, 3);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_dq"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let (code, count): (u32, u32) = data.into_val(&env);
+    assert_eq!((code, count), (2, 3));
+
+    // 3. batch_rejected_model_version
+    events::batch_rejected_model_version(&env, 1, 4);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_mv"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let (code, count): (u32, u32) = data.into_val(&env);
+    assert_eq!((code, count), (1, 4));
+
+    // 4. batch_rejected_rate_limit
+    events::batch_rejected_rate_limit(&env, 2);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_rl"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let count: u32 = data.into_val(&env);
+    assert_eq!(count, 2);
+
+    // 5. batch_rejected_attestation
+    events::batch_rejected_attestation(&env, 7);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_at"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let count: u32 = data.into_val(&env);
+    assert_eq!(count, 7);
+
+    // 6. batch_rejected_gate_failure
+    events::batch_rejected_gate_failure(&env, 9);
+    let all = env.events().all();
+    let (_, topics, data) = all.last().unwrap();
+    assert_eq!(topics.len(), 2);
+    let name: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "bat_rej_gt"));
+    let version: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(version, EVENT_VERSION);
+    let count: u32 = data.into_val(&env);
+    assert_eq!(count, 9);
 }

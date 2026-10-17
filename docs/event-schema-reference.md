@@ -49,39 +49,39 @@ All events include a `EVENT_VERSION` (currently `1`) in their topic array to ena
 - **Example**: 95 accepted, 2 rejected_data, 1 rejected_ratelimit
 
 #### `bat_rej_pa`
-- **Topic**: `("bat_rej_pa",)`
+- **Topic**: `("bat_rej_pa", EVENT_VERSION)`
 - **Data**: `u32` (count)
 - **Use Case**: Alert when contract pause causes rejections
 - **Example**: 5 entries rejected due to pause
 
 #### `bat_rej_dq`
-- **Topic**: `("bat_rej_dq",)`
+- **Topic**: `("bat_rej_dq", EVENT_VERSION)`
 - **Data**: `(reason_code: u32, count: u32)`
 - **Reason Codes**: 1=invalid_score, 2=invalid_confidence, 3=invalid_timestamp
 - **Use Case**: Detect data quality issues from signers
 - **Example**: 3 entries rejected for invalid_confidence
 
 #### `bat_rej_mv`
-- **Topic**: `("bat_rej_mv",)`
+- **Topic**: `("bat_rej_mv", EVENT_VERSION)`
 - **Data**: `(reason_code: u32, count: u32)`
 - **Reason Codes**: 1=not_registered, 2=deprecated
 - **Use Case**: Alert on model version synchronization issues
 - **Example**: 2 entries rejected with deprecated model
 
 #### `bat_rej_rl`
-- **Topic**: `("bat_rej_rl",)`
+- **Topic**: `("bat_rej_rl", EVENT_VERSION)`
 - **Data**: `u32` (count)
 - **Use Case**: Detect rate limit violations
 - **Example**: 1 entry rejected due to rate limit
 
 #### `bat_rej_at`
-- **Topic**: `("bat_rej_at",)`
+- **Topic**: `("bat_rej_at", EVENT_VERSION)`
 - **Data**: `u32` (count)
 - **Use Case**: Alert on signature/attestation failures
 - **Example**: 1 entry rejected with invalid attestation
 
 #### `bat_rej_gt`
-- **Topic**: `("bat_rej_gt",)`
+- **Topic**: `("bat_rej_gt", EVENT_VERSION)`
 - **Data**: `u32` (count)
 - **Use Case**: Track gate enforcement rejections
 - **Example**: 4 entries rejected by gate threshold
@@ -237,7 +237,7 @@ All events include a `EVENT_VERSION` (currently `1`) in their topic array to ena
 - **Example**: Service returned online after 18-minute gap
 
 #### `hb_upd`
-- **Topic**: `("hb_upd",)`
+- **Topic**: `("hb_upd", EVENT_VERSION)`
 - **Data**: `u64` (heartbeat threshold in seconds)
 - **Use Case**: Track heartbeat configuration changes
 - **Example**: Heartbeat threshold changed to 1800 seconds
@@ -265,19 +265,19 @@ All events include a `EVENT_VERSION` (currently `1`) in their topic array to ena
 ### 10. Model Version Events
 
 #### `mv_prop`
-- **Topic**: `("mv_prop",)`
+- **Topic**: `("mv_prop", EVENT_VERSION)`
 - **Data**: `(version: u32, executable_after: u64)`
 - **Use Case**: Log model version proposals
 - **Example**: Model v4 proposed; active after timestamp 1700086400
 
 #### `mv_act`
-- **Topic**: `("mv_act",)`
+- **Topic**: `("mv_act", EVENT_VERSION)`
 - **Data**: `u32` (active model version)
 - **Use Case**: Confirm model version activation
 - **Example**: Model v4 now active
 
 #### `mv_depr`
-- **Topic**: `("mv_depr",)`
+- **Topic**: `("mv_depr", EVENT_VERSION)`
 - **Data**: `u32` (deprecated version)
 - **Use Case**: Alert when model versions are retired
 - **Example**: Model v2 deprecated; no longer accepted
@@ -333,6 +333,80 @@ All events include a `EVENT_VERSION` (currently `1`) in their topic array to ena
 - **Data**: `Symbol` (asset_pair)
 - **Use Case**: Audit score deletions
 - **Example**: Score cleared for BTC/USDT
+
+### 13. Administrative & Maintenance Events
+
+#### `pc_clean`
+- **Topic**: `("pc_clean", EVENT_VERSION)`
+- **Data**: `(count: u32, oldest_kept: u64)`
+- **Use Case**: Track cleanup of expired parameter proposals
+- **Example**: 3 expired proposals pruned; oldest kept is proposal 12
+
+#### `tier_upd`
+- **Topic**: `("tier_upd", EVENT_VERSION)`
+- **Data**: `(signer: Address, min_score: u32, max_score: u32)`
+- **Use Case**: Track signer score range tier updates
+- **Example**: Signer assigned range [0, 80]
+
+#### `at_upd`
+- **Topic**: `("at_upd", EVENT_VERSION)`
+- **Data**: `u32` (new_threshold)
+- **Use Case**: Audit adaptive threshold updates
+- **Example**: Adaptive threshold updated to 78
+
+#### `sf_upd`
+- **Topic**: `("sf_upd", EVENT_VERSION)`
+- **Data**: `(enabled: bool, high_water_mark: u32, floor_value: u32)`
+- **Use Case**: Track score floor policy changes
+- **Example**: Score floor enabled; HWM=85, floor=40
+
+#### `fb_upd`
+- **Topic**: `("fb_upd", EVENT_VERSION)`
+- **Data**: `u64` (secs)
+- **Use Case**: Monitor finality buffer window adjustments
+- **Example**: Finality buffer updated to 300 seconds
+
+#### `clb_upd`
+- **Topic**: `("clb_upd", EVENT_VERSION)`
+- **Data**: `()`
+- **Use Case**: Log cluster boundary reconfigurations
+- **Example**: Cluster boundaries refreshed by admin
+
+#### `epo_open`
+- **Topic**: `("epo_open", EVENT_VERSION)`
+- **Data**: `u32` (epoch_id)
+- **Use Case**: Track epoch opening events
+- **Example**: Epoch 42 opened
+
+#### `epo_cls`
+- **Topic**: `("epo_cls", EVENT_VERSION)`
+- **Data**: `u32` (epoch_id)
+- **Use Case**: Track epoch closing events
+- **Example**: Epoch 42 closed
+
+#### `jt_upd`
+- **Topic**: `("jt_upd", EVENT_VERSION)`
+- **Data**: `u32` (threshold)
+- **Use Case**: Audit score jump anomaly threshold changes
+- **Example**: Jump detection threshold set to 30 points
+
+#### `snap`
+- **Topic**: `("snap", EVENT_VERSION)`
+- **Data**: `(score_root: BytesN<32>, entry_count: u32, ledger_seq: u32)`
+- **Use Case**: State reconciliation and post-incident verification
+- **Example**: Snapshot created with 1,250 entries at ledger sequence 123456
+
+#### `frozen`
+- **Topic**: `("frozen", EVENT_VERSION)`
+- **Data**: `Address` (by)
+- **Use Case**: Emergency contract freeze alerts
+- **Example**: Contract frozen by security admin during active breach
+
+#### `unfroz`
+- **Topic**: `("unfroz", EVENT_VERSION)`
+- **Data**: `Address` (by)
+- **Use Case**: Contract unfreeze monitoring
+- **Example**: Contract unfrozen after incident resolution
 
 ## Event Indexer Implementation Tips
 
