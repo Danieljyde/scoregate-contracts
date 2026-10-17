@@ -9,9 +9,9 @@
 //! `client.swap(...)` / `client.borrow(...)` invoking the mocks, which in
 //! turn invoke ScoreGate — rather than calling the gate functions directly.
 
-use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use mock_amm::{FailPolicy as AmmFailPolicy, MockAmm, MockAmmClient, MockAmmError};
 use mock_lending::{MockLending, MockLendingClient, MockLendingError};
+use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Ledger as _},
@@ -168,7 +168,10 @@ fn amm_provide_liquidity_allowed_for_low_risk_high_confidence() {
     let provider = Address::generate(&fixture.env);
     submit_score(&fixture, &provider, 10, 90);
 
-    assert_eq!(fixture.amm.try_provide_liquidity_gated(&provider, &1_000), Ok(Ok(())));
+    assert_eq!(
+        fixture.amm.try_provide_liquidity_gated(&provider, &symbol_short!("XLM_USDC"), &1_000),
+        Ok(Ok(()))
+    );
 }
 
 #[test]
@@ -177,7 +180,8 @@ fn amm_provide_liquidity_blocked_for_high_risk_provider() {
     let provider = Address::generate(&fixture.env);
     submit_score(&fixture, &provider, 90, 95);
 
-    let result = fixture.amm.try_provide_liquidity_gated(&provider, &1_000);
+    let result =
+        fixture.amm.try_provide_liquidity_gated(&provider, &symbol_short!("XLM_USDC"), &1_000);
     assert_eq!(result, Err(Ok(MockAmmError::HighRiskWallet)));
 }
 
@@ -187,7 +191,8 @@ fn amm_provide_liquidity_blocked_for_low_confidence() {
     let provider = Address::generate(&fixture.env);
     submit_score(&fixture, &provider, 10, 20);
 
-    let result = fixture.amm.try_provide_liquidity_gated(&provider, &1_000);
+    let result =
+        fixture.amm.try_provide_liquidity_gated(&provider, &symbol_short!("XLM_USDC"), &1_000);
     assert_eq!(result, Err(Ok(MockAmmError::LowConfidence)));
 }
 
@@ -216,7 +221,10 @@ fn amm_provide_liquidity_uses_set_risk_oracle() {
     );
 
     fixture.amm.set_risk_oracle(&fixture.admin, &alt_oracle_id);
-    assert_eq!(fixture.amm.try_provide_liquidity_gated(&provider, &500), Ok(Ok(())));
+    assert_eq!(
+        fixture.amm.try_provide_liquidity_gated(&provider, &symbol_short!("XLM_USDC"), &500),
+        Ok(Ok(()))
+    );
 }
 
 #[test]

@@ -15,11 +15,11 @@
 //! action during detection lag.
 
 mod events;
+#[cfg(test)]
+mod test;
 
 use scoregate_score::ScoreGateScoreContractClient;
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -52,6 +52,8 @@ pub enum MockAmmError {
     Unauthorized = 8,
     /// A gate threshold or confidence floor exceeds the valid 0-100 scale.
     InvalidThreshold = 9,
+    /// The AMM protocol circuit breaker is active.
+    ContractPaused = 10,
 }
 
 #[contracttype]
@@ -67,6 +69,7 @@ enum DataKey {
     MaxStalenessSecs,
     RequiredOracleVersion,
     ExpandedRiskScore,
+    Paused,
 }
 
 #[contract]
@@ -96,7 +99,40 @@ impl MockAmm {
         env.storage().instance().set(&DataKey::RequiredOracleVersion, &0u32);
         let expanded_score = Self::oracle_has_expanded_score(&env, &scoregate);
         env.storage().instance().set(&DataKey::ExpandedRiskScore, &expanded_score);
+        env.storage().instance().set(&DataKey::Paused, &false);
         Ok(())
+    }
+
+    /// Transfer administrative authority to `new_admin`. Requires authorization
+    /// of the current admin and emits an `adm_upd` event. (Issue #202)
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), MockAmmError> {
+        Self::require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        events::admin_updated(&env, &new_admin);
+        Ok(())
+    }
+
+    /// Read the currently configured fixture admin.
+    pub fn get_admin(env: Env) -> Result<Address, MockAmmError> {
+        env.storage().instance().get(&DataKey::Admin).ok_or(MockAmmError::NotConfigured)
+    }
+
+    /// Pause or unpause the mock AMM. When paused, `swap` and
+    /// `provide_liquidity_gated` reject invocations with `ContractPaused`. (Issue #203)
+    pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), MockAmmError> {
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        events::paused_updated(&env, paused);
+        Ok(())
+    }
+
+    /// Returns `true` if the mock AMM is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
     }
 
     /// Register or rotate the ScoreGate oracle this AMM consults for gate checks.
@@ -116,11 +152,8 @@ impl MockAmm {
     /// upgrade. (Issue #120)
     pub fn refresh_oracle_capabilities(env: Env, admin: Address) -> Result<bool, MockAmmError> {
         Self::require_admin(&env, &admin)?;
-        let scoregate: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::ScoreGate)
-            .ok_or(MockAmmError::NotConfigured)?;
+        let scoregate: Address =
+            env.storage().instance().get(&DataKey::ScoreGate).ok_or(MockAmmError::NotConfigured)?;
         let expanded_score = Self::oracle_has_expanded_score(&env, &scoregate);
         env.storage().instance().set(&DataKey::ExpandedRiskScore, &expanded_score);
         events::capabilities_refreshed(&env, expanded_score);
@@ -162,11 +195,8 @@ impl MockAmm {
     }
 
     fn gate_config(env: &Env) -> Result<(Address, u32, u32, FailPolicy, u64, u32), MockAmmError> {
-        let scoregate: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::ScoreGate)
-            .ok_or(MockAmmError::NotConfigured)?;
+        let scoregate: Address =
+            env.storage().instance().get(&DataKey::ScoreGate).ok_or(MockAmmError::NotConfigured)?;
         let gate_threshold: u32 = env
             .storage()
             .instance()
@@ -214,6 +244,9 @@ impl MockAmm {
         asset_pair: Symbol,
         amount: i128,
     ) -> Result<(), MockAmmError> {
+        if Self::is_paused(env.clone()) {
+            return Err(MockAmmError::ContractPaused);
+        }
         if amount <= 0 {
             return Err(MockAmmError::InvalidAmount);
         }
@@ -268,8 +301,12 @@ impl MockAmm {
     pub fn provide_liquidity_gated(
         env: Env,
         provider: Address,
+        asset_pair: Symbol,
         amount: i128,
     ) -> Result<(), MockAmmError> {
+        if Self::is_paused(env.clone()) {
+            return Err(MockAmmError::ContractPaused);
+        }
         if amount <= 0 {
             return Err(MockAmmError::InvalidAmount);
         }
@@ -282,7 +319,6 @@ impl MockAmm {
             max_staleness_secs,
             required_version,
         ) = Self::gate_config(&env)?;
-        let asset_pair = symbol_short!("XLM_USDC");
 
         let client = ScoreGateScoreContractClient::new(&env, &scoregate);
         if required_version > 0 {
@@ -324,7 +360,7 @@ impl MockAmm {
             }
         }
 
-        events::liquidity_provided(&env, &provider, amount);
+        events::liquidity_provided(&env, &provider, &asset_pair, amount);
         Ok(())
     }
 }

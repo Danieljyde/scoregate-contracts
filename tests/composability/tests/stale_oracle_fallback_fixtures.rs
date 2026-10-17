@@ -21,9 +21,9 @@
 //! issue #717). The `setup_*` helpers document the exact deploy/config steps
 //! a real AMM or lending contract must replicate.
 
-use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use mock_amm::{FailPolicy as AmmFailPolicy, MockAmm, MockAmmClient, MockAmmError};
 use mock_lending::{MockLending, MockLendingClient, MockLendingError};
+use scoregate_score::{ScoreGateScoreContract, ScoreGateScoreContractClient};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Ledger as _},
@@ -273,7 +273,7 @@ fn amm_provide_liquidity_blocked_when_score_passes_but_confidence_insufficient()
     // Score is below gate threshold (safe) but confidence is below MIN_CONFIDENCE.
     submit_score(&env, &primary, &provider, 10, MIN_CONFIDENCE - 1);
 
-    let result = amm.try_provide_liquidity_gated(&provider, &1_000);
+    let result = amm.try_provide_liquidity_gated(&provider, &symbol_short!("XLM_USDC"), &1_000);
     assert_eq!(result, Err(Ok(MockAmmError::LowConfidence)));
 }
 
