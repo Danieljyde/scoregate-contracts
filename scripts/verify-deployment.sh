@@ -38,7 +38,7 @@ WARN=0
 check() {
   local label="$1"
   local result="$2"
-  if [ "$result" = "0" ] || [ -n "$result" ]; then
+  if [ -n "$result" ] && [ "$result" != "FAIL" ] && [ "$result" != "VERIFY_FAILED" ] && [ "$result" != "SCORE_NOT_FOUND" ]; then
     log "  PASS: $label"
     PASS=$((PASS + 1))
   else
@@ -164,7 +164,11 @@ SCORE=$(soroban contract invoke \
   get_score \
   --wallet "$ADMIN_ADDRESS" \
   --asset-pair "$TEST_PAIR" 2>/dev/null || echo "SCORE_NOT_FOUND")
-check "Smoke test score is retrievable" "$SCORE"
+if [ "$SCORE" != "SCORE_NOT_FOUND" ] && [ "$SCORE" != "VERIFY_FAILED" ] && [ "$SCORE" != "FAIL" ]; then
+  check "Smoke test score is retrievable" "$SCORE"
+else
+  check "Smoke test score is retrievable" "FAIL"
+fi
 
 echo ""
 

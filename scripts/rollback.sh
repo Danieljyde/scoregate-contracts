@@ -23,6 +23,7 @@ NETWORK="${1:?ERROR: network argument is required (testnet|futurenet|mainnet)}"
 ADMIN_IDENTITY="${2:?ERROR: admin-identity argument is required}"
 TARGET_CONTRACT_ID="${3:?ERROR: target-contract-id argument is required}"
 PREVIOUS_WASM_PATH="${4:?ERROR: previous-wasm-path argument is required}"
+ADMIN_ADDRESS=$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo "$ADMIN_IDENTITY")
 
 run() {
   if [ "$DRY_RUN" = true ]; then
@@ -58,7 +59,7 @@ log "Previous WASM SHA-256: $PREVIOUS_WASM_HASH"
 log "Step 1: Proposing rollback upgrade (previous WASM hash)"
 if [ "$DRY_RUN" = true ]; then
   ROLLBACK_PROPOSAL_ID="<PROPOSAL_ID_PLACEHOLDER>"
-  echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- propose_upgrade --admin-signers '[$ADMIN_IDENTITY]' --new-wasm-hash $PREVIOUS_WASM_HASH"
+  echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- propose_upgrade --admin-signers '["\"$ADMIN_ADDRESS\""]' --new-wasm-hash $PREVIOUS_WASM_HASH"
 else
   PROPOSAL_OUTPUT=$(soroban contract invoke \
     --id "$TARGET_CONTRACT_ID" \
@@ -66,7 +67,7 @@ else
     --network "$NETWORK" \
     -- \
     propose_upgrade \
-    --admin-signers "$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo '<ADMIN>')" \
+    --admin-signers "[\"$ADMIN_ADDRESS\"]" \
     --new-wasm-hash "$PREVIOUS_WASM_HASH" 2>&1)
   log "Proposal output: $PROPOSAL_OUTPUT"
 fi
@@ -83,7 +84,7 @@ read -rp "  Execute the rollback upgrade now? (yes/no): " EXECUTE_CONFIRM
 
 log "Step 3: Executing rollback upgrade"
 if [ "$DRY_RUN" = true ]; then
-  echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- execute_upgrade --admin-signers '[$ADMIN_IDENTITY]'"
+  echo "[dry-run] soroban contract invoke --id $TARGET_CONTRACT_ID --source $ADMIN_IDENTITY --network $NETWORK -- execute_upgrade --admin-signers '["\"$ADMIN_ADDRESS\""]'"
 else
   EXECUTE_OUTPUT=$(soroban contract invoke \
     --id "$TARGET_CONTRACT_ID" \
@@ -91,7 +92,7 @@ else
     --network "$NETWORK" \
     -- \
     execute_upgrade \
-    --admin-signers "$(soroban keys address "$ADMIN_IDENTITY" 2>/dev/null || echo '<ADMIN>')" 2>&1)
+    --admin-signers "[\"$ADMIN_ADDRESS\"]" 2>&1)
   log "Execute output: $EXECUTE_OUTPUT"
 fi
 

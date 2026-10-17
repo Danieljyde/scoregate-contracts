@@ -127,7 +127,7 @@ CANARY_TEST_RESULT=$(soroban contract invoke \
   submit_score \
   --signers "[]" \
   --wallet "$ADMIN_ADDRESS" \
-  --asset-pair CANARY_TEST \
+  --asset-pair CAN_TEST \
   --score 50 \
   --benford-flag false \
   --ml-flag false \
@@ -152,7 +152,7 @@ CANARY_SCORE=$(soroban contract invoke \
   -- \
   get_score \
   --wallet "$ADMIN_ADDRESS" \
-  --asset-pair CANARY_TEST 2>/dev/null || echo "SCORE_NOT_FOUND")
+  --asset-pair CAN_TEST 2>/dev/null || echo "SCORE_NOT_FOUND")
 
 log "Canary test score result: $CANARY_SCORE"
 
