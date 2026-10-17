@@ -26,6 +26,7 @@ pub const MAX_BATCH_SIZE: u32 = 20;
 /// turning a read endpoint into a way to make the contract run out of gas.
 pub const MAX_EXPORT_PAGE_SIZE: u32 = 200;
 pub const MAX_ASSET_PAIR_BYTES: u32 = 9;
+pub const MAX_ASSET_PAIR_LEN: u32 = MAX_ASSET_PAIR_BYTES;
 pub const MAX_SCORE_COMMITMENT_BYTES: u32 = 32;
 pub const MAX_DISPUTE_BOND_PREIMAGE_BYTES: u32 = 80;
 pub const MAX_DISPUTE_BOND_SALT_BYTES: u32 = 64;
