@@ -4,14 +4,14 @@ use crate::constants::{
     BAND_STATE_TTL_EXTEND_TO, BAND_STATE_TTL_THRESHOLD, DEFAULT_CONSENSUS_EPSILON,
     DEFAULT_CONSENSUS_THRESHOLD_K, DEFAULT_COOLDOWN_SECS, DEFAULT_JUMP_THRESHOLD,
     DEFAULT_QUORUM_FAILURE_WINDOW_SECS, DEFAULT_RISK_THRESHOLD, DEFAULT_UPGRADE_DELAY_SECS,
-    EMBARGO_TTL_EXTEND_TO, EMBARGO_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO, SCORE_TTL_THRESHOLD,
-    SCORE_ENTRY_INDEX_BUCKETS,
+    EMBARGO_TTL_EXTEND_TO, EMBARGO_TTL_THRESHOLD, SCORE_ENTRY_INDEX_BUCKETS, SCORE_TTL_EXTEND_TO,
+    SCORE_TTL_THRESHOLD,
 };
 use crate::errors::Error;
 use crate::types::{
     AdaptiveRateLimit, AggregateRiskScore, AlertAckRecord, AlertType, DataKey, DataKeyB, DataKeyC,
-    DataKeyD, DataKeyE, DecayCurve, DeletionApprovalPolicy, EmbargoExpiry, FlashProtectionMode, GateDataKey,
-    HllSketch, InterpolationMethod, JumpStats, ModelVersionStats, ModelVersionStatus,
+    DataKeyD, DataKeyE, DecayCurve, DeletionApprovalPolicy, EmbargoExpiry, FlashProtectionMode,
+    GateDataKey, HllSketch, InterpolationMethod, JumpStats, ModelVersionStats, ModelVersionStatus,
     PairVolatilityState, ParamChangeProposal, ParameterProposalRecord, ParameterProposalStatus,
     PendingScoreEntry, Policy, PolicyApproval, PolicyBundleProposal, RateLimitOverrideEntry,
     RiskScore, ScoreDispute, ScoreFloorPolicy, ScoreHistogram, ScoreTrend, ScoreVelocityCap,
@@ -28,6 +28,7 @@ enum ArchitectureDataKey {
     ArchOwner,
     MandatoryReviewers,
     PendingArchOwner,
+    ReviewApprovals(Symbol),
 }
 
 // ── Admin / Service ─────────────────────────────────────────────────────────
@@ -152,9 +153,9 @@ pub fn get_score_entry_index(env: &Env) -> Vec<(Address, Symbol)> {
 }
 
 fn migrate_legacy_score_entry_index(env: &Env) {
-    if let Some(legacy) = env.storage().persistent().get::<_, Vec<(Address, Symbol)>>(
-        &DataKeyB::ScoreEntryIndex,
-    ) {
+    if let Some(legacy) =
+        env.storage().persistent().get::<_, Vec<(Address, Symbol)>>(&DataKeyB::ScoreEntryIndex)
+    {
         for entry in legacy.iter() {
             let bucket = score_entry_index_bucket(env, &entry.0, &entry.1);
             let mut bucket_index = get_score_entry_index_bucket(env, bucket);
@@ -396,9 +397,7 @@ pub fn extend_score_entry_ttl(env: &Env, wallet: &Address, asset_pair: &Symbol) 
     let key = DataKey::Score(wallet.clone(), asset_pair.clone());
     env.storage().persistent().extend_ttl(&key, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
     let history_key = DataKey::ScoreHistory(wallet.clone(), asset_pair.clone());
-    env.storage()
-        .persistent()
-        .extend_ttl(&history_key, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
+    env.storage().persistent().extend_ttl(&history_key, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
     let last_submit_key = DataKey::LastSubmitTime(wallet.clone(), asset_pair.clone());
     env.storage().persistent().extend_ttl(
         &last_submit_key,
@@ -917,10 +916,7 @@ pub fn count_pending_parameter_proposals(env: &Env) -> u32 {
 }
 
 pub fn get_parameter_proposal_index(env: &Env) -> Vec<u64> {
-    env.storage()
-        .instance()
-        .get(&DataKeyE::ParameterProposalIndex)
-        .unwrap_or_else(|| Vec::new(env))
+    env.storage().instance().get(&DataKeyE::ParameterProposalIndex).unwrap_or_else(|| Vec::new(env))
 }
 
 pub fn set_parameter_proposal_index(env: &Env, ids: &Vec<u64>) {
@@ -1246,24 +1242,14 @@ pub fn clear_score_history(env: &Env, wallet: &Address, asset_pair: &Symbol) {
 pub fn clear_score(env: &Env, wallet: &Address, asset_pair: &Symbol) {
     let key = DataKey::Score(wallet.clone(), asset_pair.clone());
     env.storage().persistent().remove(&key);
-    env.storage()
-        .persistent()
-        .remove(&DataKey::ScoreHistory(wallet.clone(), asset_pair.clone()));
+    env.storage().persistent().remove(&DataKey::ScoreHistory(wallet.clone(), asset_pair.clone()));
     env.storage()
         .persistent()
         .remove(&DataKey::HistoricalMaxScore(wallet.clone(), asset_pair.clone()));
-    env.storage()
-        .persistent()
-        .remove(&DataKeyC::BreachCount(wallet.clone(), asset_pair.clone()));
-    env.storage()
-        .persistent()
-        .remove(&DataKey::ScoreCount(wallet.clone(), asset_pair.clone()));
-    env.storage()
-        .persistent()
-        .remove(&DataKey::LastSubmitTime(wallet.clone(), asset_pair.clone()));
-    env.storage()
-        .instance()
-        .remove(&DataKeyD::TokenBucket(wallet.clone(), asset_pair.clone()));
+    env.storage().persistent().remove(&DataKeyC::BreachCount(wallet.clone(), asset_pair.clone()));
+    env.storage().persistent().remove(&DataKey::ScoreCount(wallet.clone(), asset_pair.clone()));
+    env.storage().persistent().remove(&DataKey::LastSubmitTime(wallet.clone(), asset_pair.clone()));
+    env.storage().instance().remove(&DataKeyD::TokenBucket(wallet.clone(), asset_pair.clone()));
     remove_pair_for_wallet(env, wallet, asset_pair);
     remove_score_entry(env, wallet, asset_pair);
     clear_counterparty_links(env, wallet, asset_pair);
@@ -1516,7 +1502,10 @@ pub fn set_gate_callers(env: &Env, callers: &Vec<Address>) {
 }
 
 pub fn get_gate_callers(env: &Env) -> Vec<Address> {
-    env.storage().instance().get(&DataKeyC::GateCallers).unwrap_or_else(|| Vec::new(env))
+    // Must read with the same key type `set_gate_callers` writes with
+    // (issue #222): `GateDataKey` and `DataKeyC` hash to different storage
+    // keys, so mixing them made the accessor return an empty Vec forever.
+    env.storage().instance().get(&GateDataKey::GateCallers).unwrap_or_else(|| Vec::new(env))
 }
 
 pub fn set_gate_open(env: &Env, open: bool) {
@@ -1772,7 +1761,11 @@ pub fn clear_counterparty_links(env: &Env, wallet: &Address, asset_pair: &Symbol
                 env.storage().persistent().remove(&key_cp);
             } else {
                 env.storage().persistent().set(&key_cp, &cp_links);
-                env.storage().persistent().extend_ttl(&key_cp, SCORE_TTL_THRESHOLD, SCORE_TTL_EXTEND_TO);
+                env.storage().persistent().extend_ttl(
+                    &key_cp,
+                    SCORE_TTL_THRESHOLD,
+                    SCORE_TTL_EXTEND_TO,
+                );
             }
         }
     }
@@ -2446,10 +2439,7 @@ pub fn get_signer_grace_period_secs(env: &Env) -> u64 {
 }
 
 pub fn get_active_signer_index(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&DataKeyD::ActiveSignerIndex)
-        .unwrap_or_else(|| Vec::new(env))
+    env.storage().instance().get(&DataKeyD::ActiveSignerIndex).unwrap_or_else(|| Vec::new(env))
 }
 
 pub fn set_active_signer_index(env: &Env, index: &Vec<Address>) {

@@ -1,4 +1,4 @@
-﻿//! Tests for score jump anomaly detection (issue #74).
+//! Tests for score jump anomaly detection (issue #74).
 //!
 //! When the absolute delta between consecutive scores exceeds the configured
 //! `JumpThreshold`, a `ScoreJumpAnomalyEvent` is emitted in addition to the
@@ -50,7 +50,7 @@ fn submit(
     );
 }
 
-/// Returns the last `jmp_ano` event data for `(wallet, pair)`, or `None` if
+/// Returns the last `jump` event data for `(wallet, pair)`, or `None` if
 /// no jump anomaly event was emitted.
 fn last_jump_event(
     env: &Env,
@@ -58,7 +58,7 @@ fn last_jump_event(
     wallet: &Address,
     pair: &Symbol,
 ) -> Option<(u32, u32, i64, u32, u64)> {
-    let topic = (symbol_short!("jmp_ano"), wallet.clone(), pair.clone());
+    let topic = (symbol_short!("jump"), wallet.clone(), pair.clone());
     for (addr, topics, data) in env.events().all().iter().rev() {
         if &addr == contract_id && topics == topic.into_val(env) {
             let (prev, new, delta, model, ts): (u32, u32, i64, u32, u64) = data.into_val(env);
@@ -304,4 +304,115 @@ fn test_set_jump_threshold_99_accepted() {
     let (env, client) = setup();
     client.set_jump_threshold(&Vec::new(&env), &99);
     assert_eq!(client.get_jump_threshold(), 99);
+}
+
+// ── Issue #189: flatline series with zero rolling variance ────────────────────
+
+/// Submitting identical scores repeatedly must never panic (the jump-anomaly
+/// calculation performs no division by the rolling variance), and the series
+/// has exactly zero sample variance.
+#[test]
+fn test_flatline_series_zero_variance_does_not_panic() {
+    let (env, client) = setup();
+    let cid = client.address.clone();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    for i in 0..5u32 {
+        if i > 0 {
+            env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+        }
+        submit(&env, &client, &wallet, &pair, 50);
+        // Zero delta is never a jump, regardless of the variance.
+        assert!(
+            last_jump_event(&env, &cid, &wallet, &pair).is_none(),
+            "identical consecutive scores must not flag an anomaly"
+        );
+    }
+
+    // The series [50, 50, 50, 50, 50] has zero rolling sample variance …
+    assert_eq!(client.get_score_variance(&wallet, &pair), Some(0));
+    // … and no jump was ever recorded.
+    assert_eq!(client.get_jump_stats(&wallet, &pair), (0, 0));
+}
+
+/// On a zero-variance flatline series, a delta above the fixed absolute
+/// threshold (`MIN_ABSOLUTE_JUMP_THRESHOLD` = 15) is flagged even though it
+/// is within the configured jump threshold (30) — the delta-over-variance
+/// comparison that would divide by zero is replaced by this absolute check.
+#[test]
+fn test_flatline_jump_above_absolute_threshold_flags() {
+    let (env, client) = setup();
+    let cid = client.address.clone();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    for i in 0..3u32 {
+        if i > 0 {
+            env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+        }
+        submit(&env, &client, &wallet, &pair, 50);
+    }
+    env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+    submit(&env, &client, &wallet, &pair, 70);
+
+    let event = last_jump_event(&env, &cid, &wallet, &pair)
+        .expect("flatline jump above the absolute threshold must flag");
+    assert_eq!(event.0, 50, "previous score");
+    assert_eq!(event.1, 70, "new score");
+    assert_eq!(event.2, 20, "delta");
+    let (max_jump, _) = client.get_jump_stats(&wallet, &pair);
+    assert_eq!(max_jump, 20);
+}
+
+/// On a zero-variance flatline series, a delta at or below the absolute
+/// threshold stays unflagged.
+#[test]
+fn test_flatline_jump_below_absolute_threshold_not_flagged() {
+    let (env, client) = setup();
+    let cid = client.address.clone();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    for i in 0..3u32 {
+        if i > 0 {
+            env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+        }
+        submit(&env, &client, &wallet, &pair, 50);
+    }
+    env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+    submit(&env, &client, &wallet, &pair, 60); // delta = 10 ≤ 15
+
+    assert!(last_jump_event(&env, &cid, &wallet, &pair).is_none());
+    assert_eq!(client.get_jump_stats(&wallet, &pair), (0, 0));
+}
+
+/// Non-flatline series (non-zero variance) keep the configured-threshold
+/// semantics: a delta above the absolute threshold but within the configured
+/// threshold does not flag, while a delta above the configured threshold does.
+#[test]
+fn test_non_flatline_uses_configured_threshold() {
+    let (env, client) = setup();
+    let cid = client.address.clone();
+    let wallet = Address::generate(&env);
+    let pair = symbol_short!("XLM_USDC");
+
+    submit(&env, &client, &wallet, &pair, 40);
+    env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+    submit(&env, &client, &wallet, &pair, 55);
+    env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+    // prior series [40, 55] has non-zero variance; delta = 20 is above the
+    // absolute threshold (15) but within the configured threshold (30).
+    submit(&env, &client, &wallet, &pair, 75);
+    assert!(
+        last_jump_event(&env, &cid, &wallet, &pair).is_none(),
+        "non-flatline deltas must honour the configured jump threshold"
+    );
+
+    env.ledger().with_mut(|l| l.timestamp += COOLDOWN);
+    // delta = 35 > 30 → flags on the configured threshold.
+    submit(&env, &client, &wallet, &pair, 40);
+    let event = last_jump_event(&env, &cid, &wallet, &pair)
+        .expect("delta above the configured threshold must flag");
+    assert_eq!(event.2, -35);
 }

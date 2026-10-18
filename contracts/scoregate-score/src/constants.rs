@@ -40,6 +40,13 @@ pub const DEFAULT_RISK_THRESHOLD: u32 = 75;
 /// Default threshold for score jump anomaly detection.
 pub const DEFAULT_JUMP_THRESHOLD: u32 = 30;
 
+/// Absolute jump threshold used when the rolling sample variance of a
+/// wallet's score history is zero — i.e. a flatline series where every
+/// stored score is identical (issue #189). Computing a delta-over-variance
+/// anomaly score in that case would be an integer division by zero, so the
+/// delta is compared against this fixed value instead.
+pub const MIN_ABSOLUTE_JUMP_THRESHOLD: u32 = 15;
+
 /// Semantic contract version; bump on breaking ABI changes.
 ///
 /// History:
@@ -93,6 +100,16 @@ pub const DEFAULT_DECAY_LAMBDA_NUM: u64 = 0;
 pub const DEFAULT_DECAY_LAMBDA_DEN: u64 = 1;
 pub const MAX_DECAY_LAMBDA_NUM: u64 = 1;
 pub const MAX_DECAY_LAMBDA_DEN: u64 = 1;
+
+/// Maximum decay horizon in seconds (365 days) (issue #188).
+///
+/// Elapsed times are clamped to this horizon before the fixed-point decay
+/// and interpolation math scales them, so arbitrarily large timestamps
+/// (multi-year gaps, simulated future timestamps) can never overflow the
+/// intermediates. Scores older than the horizon evaluate to the same
+/// (saturated) value as a score exactly at the horizon — a fully decayed
+/// neutral baseline for any practically configured λ.
+pub const MAX_DECAY_HORIZON_SECS: u64 = 31_536_000;
 
 /// Maximum number of counterparty links allowed per wallet per asset pair.
 pub const MAX_COUNTERPARTY_LINKS_PER_WALLET: u32 = 50;

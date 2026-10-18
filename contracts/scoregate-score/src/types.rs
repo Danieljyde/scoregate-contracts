@@ -805,7 +805,9 @@ pub enum DataKeyC {
     AggregatePubKey,
     OriginalServiceThreshold,
     PairCooldown(Symbol),
-    GateCallers,
+    // `GateCallers` deliberately lives only in `GateDataKey` — having the
+    // variant in both enums made `set_gate_callers`/`get_gate_callers` use
+    // mismatched keys (issue #222).
     GateOpen,
     BandEntryTime(Address, Symbol),
     BreachCount(Address, Symbol),

@@ -150,6 +150,15 @@ Where $x = \lambda \cdot t$ (scaled by `SCALE`).
 
 **Accuracy:** For $x < 5$, this approximation achieves ~6 decimal places of precision (error < 0.01%).
 
+### Decay Horizon (issue #188)
+
+`age_secs` is clamped to `MAX_DECAY_HORIZON_SECS` (31,536,000 s = 365 days) before
+scaling, and the `x_scaled` intermediates are computed in `u128` with saturating
+operators before the division by `den`. An age beyond the horizon evaluates to the
+same factor as a score exactly at the horizon — the saturated neutral baseline — so
+multi-year ages (or simulated future timestamps) can never overflow the fixed-point
+chain and abort the transaction.
+
 ### Integer Implementation
 
 From `lib.rs` (`decay_fixed` function):
@@ -162,11 +171,16 @@ fn decay_fixed(age_secs: u64, lambda_num: u32, lambda_den: u32) -> u64 {
         return SCALE;  // No decay
     }
     
-    // Compute x_scaled = (num * age_secs * SCALE) / den
-    let x_scaled = (lambda_num as u64)
-        .checked_mul(age_secs)
-        .and_then(|v| v.checked_mul(SCALE))
-        .and_then(|v| v.checked_div(lambda_den as u64))
+    // Clamp to the maximum decay horizon; saturate beyond it (issue #188)
+    let age_secs = age_secs.min(MAX_DECAY_HORIZON_SECS);
+    
+    // Compute x_scaled = (num * age_secs * SCALE) / den in u128 with
+    // saturating intermediates so no step can overflow
+    let x_scaled = (lambda_num as u128)
+        .saturating_mul(age_secs as u128)
+        .saturating_mul(SCALE as u128)
+        .checked_div(lambda_den as u128)
+        .map(|v| v.min(u64::MAX as u128) as u64)
         .unwrap_or(0);
     
     // For large x, decay → 0
@@ -297,6 +311,23 @@ pub fn get_interpolated_score(
     history.last().score
 }
 ```yaml
+
+### Interpolation Method Dispatch (issue #187)
+
+`get_interpolated_score` reads the configured `InterpolationMethod`
+(`storage::get_interpolation_method`, default `Linear`):
+
+- **`Linear`** — the decay-curve interpolation shown above.
+- **`CubicSpline`** — when the stored history holds at least 3 entries, the
+  query delegates to `cubic_spline_interpolate`, a Catmull-Rom cubic Hermite
+  spline with one-sided boundary tangents (fixed-point, output clamped to
+  `[0, 100]`). With fewer than 3 entries the call falls back to curve
+  interpolation.
+
+Exact-match and out-of-range boundary short-circuits run before the dispatch
+in both modes, and the linear fraction is bounded by the segment length and
+computed with `u128` saturating intermediates so arbitrarily large timestamp
+gaps cannot overflow.
 
 **Integer arithmetic notes:**
 - Numerator is `(timestamp - a.timestamp) * (b.score - a.score)` as `i128` to avoid overflow.
@@ -597,8 +628,15 @@ and triggers an on-chain event.
 ### Drift Check Logic
 
 delta = |new_score - previous_score|
+variance = rolling sample variance of the prior scores for (wallet, pair)
 
 if delta > jump_threshold:
+    emit ScoreJumpAnomalyEvent { wallet, pair, prev, new, delta, timestamp }
+    increment jump_anomaly_count for (wallet, pair)
+elif variance == 0 and delta > MIN_ABSOLUTE_JUMP_THRESHOLD (15):
+    # Flatline series (every prior score identical): comparing
+    # delta / variance would divide by zero, so the delta is checked
+    # against a fixed absolute threshold instead (issue #189).
     emit ScoreJumpAnomalyEvent { wallet, pair, prev, new, delta, timestamp }
     increment jump_anomaly_count for (wallet, pair)
 
@@ -612,6 +650,11 @@ if delta > jump_threshold:
 - The boundary is **exclusive**: `delta == jump_threshold` is accepted without
   an anomaly; `delta == jump_threshold + 1` triggers the anomaly.
 - Score drops (decreasing changes) are subject to the same check as increases.
+- Zero-variance (flatline) series are never divided by: when all prior scores
+  are identical the delta is compared against the fixed
+  `MIN_ABSOLUTE_JUMP_THRESHOLD` (15) *in addition to* `jump_threshold`, so
+  legitimate flatline submissions can neither abort (division by zero) nor
+  silently skip an anomalous jump (issue #189).
 
 ### Jump Stats API
 
@@ -631,7 +674,7 @@ if delta > jump_threshold:
 
 - `jump_threshold` is configurable post-deploy by admin multisig via
   `set_jump_threshold`.
-- `ScoreJumpAnomalyEvent` is emitted on the `jmp_ano` topic with data
+- `ScoreJumpAnomalyEvent` is emitted on the `jump` topic with data
   `(prev_score, new_score, abs_delta, threshold, timestamp)`.
 - Jump stats are stored per `(wallet, asset_pair)` under a persistent key.
 

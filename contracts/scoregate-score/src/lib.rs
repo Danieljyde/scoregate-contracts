@@ -89,9 +89,6 @@ mod test_zk_range_proof;
 mod test_attestation;
 
 #[cfg(test)]
-mod test_zk_range_proof;
-
-#[cfg(test)]
 mod test_attestation_domain_compat;
 
 // #[cfg(test)]
@@ -103,8 +100,8 @@ mod test_batch_attestation_replay;
 // #[cfg(test)]
 // mod test_score_delta;
 
-// #[cfg(test)]
-// mod test_jump;
+#[cfg(test)]
+mod test_jump;
 
 // #[cfg(test)]
 // mod test_model_stats;
@@ -263,6 +260,15 @@ mod test_arch_owner;
 
 #[cfg(test)]
 mod test_pause;
+
+#[cfg(test)]
+mod test_bayesian;
+
+#[cfg(test)]
+mod test_decay;
+
+#[cfg(test)]
+mod test_storage;
 
 use soroban_sdk::{
     contract, contractimpl, crypto::Hash, symbol_short, token, Address, Bytes, BytesN, Env,
@@ -1819,8 +1825,8 @@ impl ScoreGateScoreContract {
                 // `require_service_signers_auth`); any signer still not
                 // `Active` afterwards is rejected.
                 governance_helpers::transition_pending_to_active_if_ready(&env, &signer)?;
-                if let Some(state) = storage::get_signer_state(&env, &signer) {
-                    if state != SignerState::Active {
+                if let Some(record) = storage::get_signer_state_record(&env, &signer) {
+                    if record.state != SignerState::Active {
                         return Err(Error::UnauthorizedSigner);
                     }
                 }
@@ -2000,7 +2006,11 @@ impl ScoreGateScoreContract {
                         .is_err()
                         {
                             rejection_code = Error::RateLimitExceeded as u32;
-                            results.push_back(BatchEntryResult { index: i, accepted, rejection_code });
+                            results.push_back(BatchEntryResult {
+                                index: i,
+                                accepted,
+                                rejection_code,
+                            });
                             continue;
                         }
 
@@ -3031,9 +3041,7 @@ impl ScoreGateScoreContract {
                     let needed = (target_pct as u64)
                         .saturating_mul(total)
                         .saturating_sub(prev_cum.saturating_mul(100));
-                    let bin_fraction = needed
-                        .saturating_mul(10)
-                        / count.saturating_mul(100).max(1);
+                    let bin_fraction = needed.saturating_mul(10) / count.saturating_mul(100).max(1);
                     let score = bin_low.saturating_add(bin_fraction as u32);
                     new_threshold = score.min(100);
                     break;
@@ -3124,11 +3132,7 @@ impl ScoreGateScoreContract {
     /// brand new wallet looked exactly as stable as a long-standing consistent
     /// one. Callers that need to tell the cases apart should match on `None`
     /// rather than on a zero value.
-    pub fn get_score_variance(
-        env: Env,
-        wallet: Address,
-        asset_pair: Symbol,
-    ) -> Option<u64> {
+    pub fn get_score_variance(env: Env, wallet: Address, asset_pair: Symbol) -> Option<u64> {
         if storage::is_embargoed(&env, &wallet) {
             return None;
         }
@@ -3207,6 +3211,15 @@ impl ScoreGateScoreContract {
         if timestamp >= last.timestamp {
             return last.score;
         }
+        // Honour the admin-configured interpolation method (issue #187).
+        // `CubicSpline` delegates to the Catmull-Rom spline whenever the
+        // history holds enough points to estimate neighbour tangents
+        // (`len >= 3`); otherwise fall through to decay-curve interpolation.
+        if storage::get_interpolation_method(&env) == InterpolationMethod::CubicSpline
+            && history.len() >= 3
+        {
+            return Self::cubic_spline_interpolate(&history, timestamp);
+        }
         let curve = storage::get_decay_curve(&env);
         for i in 0..(history.len() - 1) {
             let a = history.get(i).unwrap();
@@ -3226,7 +3239,6 @@ impl ScoreGateScoreContract {
     /// Catmull-Rom cubic Hermite spline interpolation using fixed-point
     /// arithmetic (no floating point). Tangents are estimated from adjacent
     /// neighbours; boundary tangents use one-sided finite differences.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     fn cubic_spline_interpolate(history: &Vec<RiskScore>, timestamp: u64) -> u32 {
         let n = history.len();
         for i in 0..(n - 1) {
@@ -3315,6 +3327,12 @@ impl ScoreGateScoreContract {
 
     /// Fixed-point curve interpolation between two score points.
     /// `elapsed` and `dt` are both in seconds; result is clamped to 0–100.
+    ///
+    /// `elapsed` is bounded by the segment length and the fixed-point
+    /// fraction is computed in `u128` with saturating operators, so
+    /// arbitrarily large elapsed times (issue #188) can never overflow the
+    /// interpolation arithmetic — the fraction always stays within
+    /// `[0, SCALE]`.
     fn apply_curve_interp(
         elapsed: u64,
         dt: u64,
@@ -3323,35 +3341,49 @@ impl ScoreGateScoreContract {
         curve: &DecayCurve,
     ) -> u32 {
         const SCALE: i128 = 1_000_000;
-        let f = (elapsed as i128 * SCALE) / (dt as i128); // 0..SCALE
+        // StepWise thresholds are pure comparisons against the raw elapsed
+        // time, so that branch keeps the unclamped value.
+        let raw_elapsed = elapsed;
+        // Scale only within [0, dt]: the fraction then stays inside
+        // [0, SCALE] no matter how large `elapsed` or `dt` are, which bounds
+        // every downstream product (f², f·delta) as well.
+        let clamped_elapsed = elapsed.min(dt);
+        let f = if dt == 0 {
+            0i128
+        } else {
+            ((clamped_elapsed as u128).saturating_mul(SCALE as u128) / (dt as u128))
+                .min(SCALE as u128) as i128
+        }; // 0..SCALE
         let sa = score_a as i128;
         let sb = score_b as i128;
         let delta = sb - sa;
 
         let result = match curve {
             // Linear — preserves existing behaviour.
-            DecayCurve::Exponential => sa + (f * delta) / SCALE,
+            DecayCurve::Exponential => sa + f.saturating_mul(delta) / SCALE,
             // Convex: slow initial change, accelerates toward the end.
             DecayCurve::Quadratic => {
-                let f2 = (f * f) / SCALE;
-                sa + (f2 * delta) / SCALE
+                let f2 = f.saturating_mul(f) / SCALE;
+                sa + f2.saturating_mul(delta) / SCALE
             }
             // Concave: fast initial change, decelerates — y = 2f − f².
             // Passes through (0,0) and (1,1) so the endpoints are exact.
             DecayCurve::Logarithmic => {
-                let f2 = (f * f) / SCALE;
+                let f2 = f.saturating_mul(f) / SCALE;
                 let y = (2 * f - f2).clamp(0, SCALE);
-                sa + (y * delta) / SCALE
+                sa + y.saturating_mul(delta) / SCALE
             }
             // Discrete tier drops: pick the step with the highest
-            // time_threshold_secs that is still ≤ elapsed.
+            // time_threshold_secs that is still ≤ raw elapsed. Threshold
+            // matching performs no arithmetic, so the decay-horizon clamp
+            // does not apply here.
             DecayCurve::StepWise(steps) => {
                 let mut best_thr: u64 = 0;
                 let mut best_found = false;
                 let mut step_score = sa;
                 for j in 0..steps.len() {
                     let step = steps.get(j).unwrap();
-                    if step.time_threshold_secs <= elapsed
+                    if step.time_threshold_secs <= raw_elapsed
                         && (!best_found || step.time_threshold_secs >= best_thr)
                     {
                         best_thr = step.time_threshold_secs;
@@ -11151,6 +11183,12 @@ impl ScoreGateScoreContract {
     /// where x = λ * age. This achieves ~6 decimal places of accuracy.
     /// For practical staleness windows, the error is <0.01%.
     ///
+    /// The age is clamped to [`constants::MAX_DECAY_HORIZON_SECS`] and the
+    /// fixed-point intermediates are computed in `u128` with saturating
+    /// operators, so arbitrarily large elapsed times (issue #188) can never
+    /// overflow; scores older than the horizon saturate to the same factor
+    /// as a score exactly at the horizon (the neutral baseline).
+    ///
     /// See [docs/score-math.md](../../docs/score-math.md) for the formula and fixed-point implementation notes.
     fn decay_fixed(age_secs: u64, lambda_num: u64, lambda_den: u64) -> u64 {
         const SCALE: u64 = constants::DECAY_FIXED_POINT_SCALE;
@@ -11160,16 +11198,23 @@ impl ScoreGateScoreContract {
             return SCALE;
         }
 
+        // Clamp the elapsed time to the maximum decay horizon (issue #188).
+        // Beyond the horizon the factor has already saturated for any
+        // practically configured λ, and the clamp keeps every intermediate
+        // bounded even for multi-year or simulated future timestamps.
+        let age_secs = age_secs.min(constants::MAX_DECAY_HORIZON_SECS);
+
         // Compute x = λ * age_seconds = (num / den) * age_seconds
-        // To maintain precision, we compute in scaled integer space.
-        // x_scaled = (num * age_seconds * SCALE) / den
-        let x_scaled = match lambda_num
-            .checked_mul(age_secs)
-            .and_then(|v| v.checked_mul(SCALE))
-            .and_then(|v| v.checked_div(lambda_den))
+        // To maintain precision, we compute in scaled integer space using
+        // u128 saturating arithmetic so no intermediate can overflow:
+        // x_scaled = (num * age_secs * SCALE) / den
+        let x_scaled = match (lambda_num as u128)
+            .saturating_mul(age_secs as u128)
+            .saturating_mul(SCALE as u128)
+            .checked_div(lambda_den as u128)
         {
-            Some(v) => v,
-            None => return 0, // Overflow: decay factor → 0
+            Some(v) => v.min(u64::MAX as u128) as u64,
+            None => return 0, // den == 0 cannot be configured; decay factor → 0
         };
 
         // Piecewise approximation of e^(-x_scaled/SCALE).
@@ -11258,8 +11303,10 @@ impl ScoreGateScoreContract {
     }
 
     /// Emit a `ScoreJumpAnomalyEvent` when the absolute delta between the new
-    /// and previous score exceeds the configured jump threshold. No event is
-    /// emitted on the first submission (previous_score is `None`).
+    /// and previous score exceeds the configured jump threshold, or — when the
+    /// rolling score series is a flatline with zero variance — the fixed
+    /// absolute threshold (issue #189). No event is emitted on the first
+    /// submission (previous_score is `None`).
     fn emit_score_jump_anomaly(
         env: &Env,
         wallet: &Address,
@@ -11271,7 +11318,7 @@ impl ScoreGateScoreContract {
         if let Some(prev) = previous_score {
             let delta_abs = new_score.abs_diff(prev);
             let jump_threshold = storage::get_jump_threshold(env);
-            if delta_abs > jump_threshold {
+            if Self::detect_jump_anomaly(env, wallet, asset_pair, delta_abs, jump_threshold) {
                 let delta = (new_score as i64) - (prev as i64);
                 let timestamp = env.ledger().timestamp();
                 events::score_jump_anomaly(
@@ -11287,6 +11334,62 @@ impl ScoreGateScoreContract {
                 storage::record_jump_stats(env, wallet, asset_pair, delta_abs, timestamp);
             }
         }
+    }
+
+    /// Jump-anomaly classification (issue #189).
+    ///
+    /// The classification never divides by the rolling sample variance: for a
+    /// flatline series (every prior score identical ⇒ variance == 0) a
+    /// `delta / variance` anomaly score would be an integer division by zero
+    /// and abort a legitimate score submission. Instead, a zero-variance
+    /// series compares `delta_abs` against the fixed absolute threshold
+    /// [`constants::MIN_ABSOLUTE_JUMP_THRESHOLD`], and every other series
+    /// keeps using the admin-configured jump threshold.
+    fn detect_jump_anomaly(
+        env: &Env,
+        wallet: &Address,
+        asset_pair: &Symbol,
+        delta_abs: u32,
+        jump_threshold: u32,
+    ) -> bool {
+        if delta_abs > jump_threshold {
+            return true;
+        }
+        // A zero delta is never a jump; short-circuits the identical-score
+        // hot path before the history read below.
+        if delta_abs == 0 {
+            return false;
+        }
+        Self::rolling_history_is_flatline(env, wallet, asset_pair)
+            && delta_abs > constants::MIN_ABSOLUTE_JUMP_THRESHOLD
+    }
+
+    /// Returns `true` when the stored score history for `(wallet, asset_pair)`
+    /// Returns `true` when the stored score history for `(wallet, asset_pair)`
+    /// holds at least two prior samples that are all identical — exactly the
+    /// `variance == 0` condition for integer samples (population variance is
+    /// zero iff every sample equals the mean).
+    ///
+    /// The score currently being finalised has already been pushed to `history`
+    /// at `history.len() - 1`. The prior rolling series consists of
+    /// `0..(history.len() - 1)` (issue #189).
+    fn rolling_history_is_flatline(env: &Env, wallet: &Address, asset_pair: &Symbol) -> bool {
+        let history = storage::get_score_history(env, wallet, asset_pair);
+        if history.len() < 3 {
+            return false;
+        }
+        let prior_len = history.len() - 1;
+        let first = match history.get(0) {
+            Some(r) => r.score,
+            None => return false,
+        };
+        for i in 1..prior_len {
+            match history.get(i) {
+                Some(r) if r.score == first => {}
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Shared implementation behind `get_aggregate_score`. Iterates the
@@ -11356,8 +11459,7 @@ impl ScoreGateScoreContract {
             let product = decayed_weight
                 .checked_mul(component.score as u64)
                 .ok_or(Error::ArithmeticOverflow)?;
-            weighted_sum =
-                weighted_sum.checked_add(product).ok_or(Error::ArithmeticOverflow)?;
+            weighted_sum = weighted_sum.checked_add(product).ok_or(Error::ArithmeticOverflow)?;
             weight_sum = weight_sum.checked_add(decayed_weight).ok_or(Error::ArithmeticOverflow)?;
         }
 
@@ -11837,8 +11939,7 @@ impl ScoreGateScoreContract {
             epoch_id: storage::get_current_epoch(env),
             ledger_sequence: env.ledger().sequence(),
             submitted_at: now,
-            validation_branch: if !service_set.is_empty()
-                && storage::get_service_threshold(env) > 0
+            validation_branch: if !service_set.is_empty() && storage::get_service_threshold(env) > 0
             {
                 symbol_short!("multisig")
             } else {
@@ -11864,13 +11965,7 @@ impl ScoreGateScoreContract {
 
         let score_threshold = storage::get_risk_threshold(env);
         if risk_score.score >= score_threshold {
-            events::threshold_breached(
-                env,
-                wallet,
-                asset_pair,
-                risk_score.score,
-                score_threshold,
-            );
+            events::threshold_breached(env, wallet, asset_pair, risk_score.score, score_threshold);
         }
         Self::update_breach_counter(env, wallet, asset_pair, risk_score.score, score_threshold);
         Self::evaluate_risk_band(env, wallet, asset_pair, risk_score.score, score_threshold);

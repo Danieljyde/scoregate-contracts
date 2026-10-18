@@ -1,6 +1,8 @@
 //! Governance helpers for signer state validation and emergency action protections.
 //! Implements issues #691, #692, #693.
 
+#![allow(dead_code)]
+
 use crate::errors::Error;
 use crate::storage;
 use crate::types::SignerState;
