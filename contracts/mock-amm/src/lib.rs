@@ -306,7 +306,7 @@ impl MockAmm {
     ) -> Result<(), MockAmmError> {
         if Self::is_paused(env.clone()) {
             return Err(MockAmmError::ContractPaused);
-        }
+        provider.require_auth();
         if amount <= 0 {
             return Err(MockAmmError::InvalidAmount);
         }

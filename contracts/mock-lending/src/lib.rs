@@ -47,6 +47,7 @@ pub enum MockLendingError {
     Unauthorized = 7,
     /// A gate threshold or confidence floor exceeds the valid 0-100 scale.
     InvalidThreshold = 8,
+    ContractPaused = 9,
 }
 
 #[contracttype]
@@ -64,6 +65,7 @@ enum DataKey {
     RequiredOracleVersion,
     ExpandedRiskScore,
     MaxBorrowAmount,
+    Paused,
 }
 
 #[contract]
@@ -122,7 +124,9 @@ impl MockLending {
         admin: Address,
         max_borrow_amount: i128,
     ) -> Result<(), MockLendingError> {
+        user.require_auth();
         Self::require_admin(&env, &admin)?;
+        if Self::is_paused(env.clone()) { return Err(MockLendingError::ContractPaused); }
         if max_borrow_amount <= 0 {
             return Err(MockLendingError::InvalidAmount);
         }
@@ -289,4 +293,22 @@ impl MockLending {
         events::borrow_executed(&env, &user, &asset_pair, amount);
         Ok(())
     }
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored { return; }
+        env.storage().instance().set(&DataKey::Paused, &true);
+    }
+
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored { return; }
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
 }
+

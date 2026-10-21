@@ -113,6 +113,8 @@ pub enum WireValue {
     U64(u64),
     Bool(bool),
     Symbol(String),
+    Vec(Vec<WireValue>),
+    Bytes(Vec<u8>),
 }
 
 mod i128_decimal {
